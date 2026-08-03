@@ -1,0 +1,69 @@
+@import "tailwindcss";
+
+/*
+  CRAM it — design tokens.
+
+  Dark by default, and only dark. A student using this has their brightness
+  turned down at 11pm; a light mode would be a second thing to maintain for
+  nobody who has asked for it.
+
+  --mark (red) is the scarcest thing here. It means time pressure, or the one
+  next action. Two reds on a screen means one of them is wrong.
+*/
+
+@theme {
+  --color-ink: #12141a; /* page background */
+  --color-paper: #1b1e26; /* raised surfaces: cards, inputs */
+  --color-line: #2a2f3a; /* hairlines */
+  --color-text: #e8e6e1; /* off-white, never pure white — less glare at night */
+  --color-muted: #8a8f9c;
+  --color-mark: #ff4d3d;
+  --color-pass: #5bd9a6;
+
+  /* Condensed grotesk for numbers and headings, humanist sans for body.
+     System stacks only: a web font is a network round-trip standing between a
+     frightened student and their first card. */
+  --font-display: "Haettenschweiler", "Arial Narrow", "Oswald",
+    system-ui, sans-serif;
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono",
+    Menlo, Consolas, monospace;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--color-ink);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 17px; /* floor for mobile readability */
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Keyboard focus must always be visible. Someone navigating by keyboard
+   should never have to guess where they are. */
+:focus-visible {
+  outline: 2px solid var(--color-text);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* All numbers are monospace: countdowns don't jitter as digits change. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

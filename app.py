@@ -20,14 +20,15 @@ st.set_page_config(page_title="SMA Crossover Bot", page_icon="📈", layout="wid
 MODES = {
     "🐢 Safe": dict(timeframe="15Min", short=20, long=50, leverage=1.0, risk_pct=0.0, stop_pct=0.0,
                    take_profit_pct=0.0, allow_short=False, max_positions=0, flatten_eod=False,
-                   challenge=False),
-    "🔥 Aggressive": dict(timeframe="5Min", short=9, long=21, leverage=4.0, risk_pct=2.0, stop_pct=1.0,
-                         take_profit_pct=3.0, allow_short=True, max_positions=3, flatten_eod=True,
-                         challenge=True),
-    "💀 Degen": dict(timeframe="5Min", short=5, long=13, leverage=10.0, risk_pct=3.0, stop_pct=0.75,
-                    take_profit_pct=4.0, allow_short=True, max_positions=2, flatten_eod=True,
-                    challenge=True),
+                   challenge=False, interval=60),
+    "🔥 Aggressive": dict(timeframe="5Min", short=9, long=21, leverage=4.0, risk_pct=1.0, stop_pct=0.5,
+                         take_profit_pct=1.0, allow_short=True, max_positions=3, flatten_eod=True,
+                         challenge=True, interval=30),
+    "⚡ Scalper": dict(timeframe="1Min", short=5, long=20, leverage=4.0, risk_pct=1.0, stop_pct=0.4,
+                      take_profit_pct=0.8, allow_short=True, max_positions=2, flatten_eod=True,
+                      challenge=True, interval=15),
 }
+MAX_RISK_PCT = 1.0
 TIMEFRAMES = ["1Min", "5Min", "15Min", "30Min", "1Hour", "1Day"]
 BENCHMARK = "QQQ"
 
@@ -43,7 +44,7 @@ account = get_account(settings.db_path, settings.starting_cash)
 
 # ---- Sidebar controls ----
 st.sidebar.title("⚙️ Bot settings")
-mode = st.sidebar.radio("Mode", list(MODES), index=1, horizontal=True)
+mode = st.sidebar.radio("Mode", list(MODES), index=2, horizontal=True)
 d = MODES[mode]
 
 symbols = st.sidebar.multiselect(
@@ -65,14 +66,16 @@ if short >= long:
 
 with st.sidebar.expander("⚡ Risk", expanded=mode != "🐢 Safe"):
     leverage = st.slider("Leverage", 1.0, 20.0, d["leverage"], 0.5, key=f"lev_{mode}")
-    risk_pct = st.slider("Risk per trade (% of account)", 0.0, 10.0, d["risk_pct"], 0.25,
-                         key=f"risk_{mode}", help="0 = split cash evenly across the watchlist")
-    stop_pct = st.slider("Stop loss %", 0.0, 5.0, d["stop_pct"], 0.25, key=f"stop_{mode}")
-    tp_pct = st.slider("Take profit %", 0.0, 10.0, d["take_profit_pct"], 0.25, key=f"tp_{mode}")
+    risk_pct = st.slider("Risk per trade (% of account)", 0.0, MAX_RISK_PCT, d["risk_pct"], 0.1,
+                         key=f"risk_{mode}", help="Capped at 1%. 0 = split cash evenly across the watchlist")
+    stop_pct = st.slider("Stop loss %", 0.0, 5.0, d["stop_pct"], 0.05, key=f"stop_{mode}")
+    tp_pct = st.slider("Take profit %", 0.0, 10.0, d["take_profit_pct"], 0.05, key=f"tp_{mode}")
     allow_short = st.toggle("Short on sell signals", d["allow_short"], key=f"short_on_{mode}")
     max_positions = st.number_input("Max open positions (0 = no limit)", 0, 20, d["max_positions"],
                                     key=f"maxpos_{mode}")
     flatten_eod = st.toggle("Close everything before 4pm", d["flatten_eod"], key=f"eod_{mode}")
+    slippage = st.number_input("Trading cost per side %", 0.0, 1.0, settings.slippage_pct, 0.01,
+                               format="%.2f", help="Spread + slippage + fees, paid on entry and exit")
 
 with st.sidebar.expander("🏆 Prop challenge rules", expanded=d["challenge"]):
     challenge_on = st.toggle("Enforce challenge rules", d["challenge"], key=f"ch_{mode}")
@@ -82,7 +85,7 @@ with st.sidebar.expander("🏆 Prop challenge rules", expanded=d["challenge"]):
     window = st.number_input("Days to pass", 5, 120, 30)
 
 risk = RiskConfig(leverage, risk_pct, stop_pct, tp_pct, allow_short, int(max_positions), flatten_eod,
-                  settings.slippage_pct)
+                  slippage)
 rules = ChallengeRules(challenge_on, target, daily_loss, max_dd)
 intraday = timeframe != "1Day"
 
@@ -90,7 +93,8 @@ settings.timeframe = timeframe
 feed = make_feed(settings)
 
 running = st.sidebar.toggle("▶️ Bot running", value=False)
-interval = st.sidebar.select_slider("Check every (seconds)", [15, 30, 60, 120, 300], value=60)
+interval = st.sidebar.select_slider("Check every (seconds)", [10, 15, 30, 60, 120, 300],
+                                    value=d["interval"], key=f"interval_{mode}")
 
 with st.sidebar.expander("Reset paper account"):
     new_cash = st.number_input("Starting cash ($)", 100.0, 10_000_000.0, settings.starting_cash, 500.0)
@@ -105,6 +109,9 @@ st.caption(f"{mode} · SMA{short}/{long} on {timeframe} bars · {leverage:g}x le
 if not settings.has_alpaca_keys:
     st.warning("No Alpaca keys found — showing **demo data** (random prices). "
                "Add your keys to `.env` to use live market data.", icon="🧪")
+if risk_pct and stop_pct and stop_pct < 10 * slippage:
+    st.caption(f"⚠️ A {stop_pct:g}% stop is tight next to {2 * slippage:g}% of trading costs "
+               "per round trip. Fees eat a big chunk of every win at this speed.")
 if leverage > 4:
     st.caption("💀 Over 4x is more than a US stock broker allows intraday. Prop CFD accounts can go "
                "higher, and here it's all fake money anyway.")
@@ -244,9 +251,9 @@ def backtest_panel():
     st.caption(f"Replays the exact rules from the sidebar ({mode}, {timeframe} bars) on past prices. "
                "Stops and targets are checked on bar closes, so real fills can be worse.")
     c1, c2 = st.columns([2, 1])
-    max_months = 96 if not intraday else 24
-    months = c1.slider("Months of history", 1, max_months, 60 if not intraday else 6,
-                       key=f"bt_months_{intraday}")
+    # 1-minute history is huge, so keep those backtests shorter.
+    max_months, default_months = {"1Day": (96, 60), "1Min": (6, 2)}.get(timeframe, (24, 6))
+    months = c1.slider("Months of history", 1, max_months, default_months, key=f"bt_months_{timeframe}")
     cash = c2.number_input("Starting cash ($)", 1000.0, 10_000_000.0, settings.starting_cash, 1000.0,
                            key="bt_cash")
     if not symbols:

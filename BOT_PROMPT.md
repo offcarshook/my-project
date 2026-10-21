@@ -37,3 +37,8 @@ Build a basic trading bot with a dashboard, fed with live data, using paper trad
 - Modes: Safe / Aggressive / Degen with leverage, risk-per-trade sizing, stop loss,
   take profit, shorting, max positions and flatten-before-close
 - Backtest runs a challenge simulator over rolling 30-day windows and reports the pass rate
+
+## v3: lower risk, higher frequency
+- Max 1% risk per trade, 5% daily loss limit, 10% max drawdown
+- Trade more often instead of bigger: new ⚡ Scalper mode on 1-minute bars (default)
+- Degen mode removed; Aggressive lowered to 1% risk

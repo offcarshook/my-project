@@ -6,21 +6,25 @@ crosses back below**. Paper money only, so nothing real is at risk.
 
 ## Modes
 
-| | 🐢 Safe | 🔥 Aggressive (default) | 💀 Degen |
+| | 🐢 Safe | 🔥 Aggressive | ⚡ Scalper (default) |
 | --- | --- | --- | --- |
-| Bars | 15Min | 5Min | 5Min |
-| SMAs | 20 / 50 | 9 / 21 | 5 / 13 |
-| Leverage | 1x | 4x | 10x |
-| Risk per trade | split evenly | 2% | 3% |
-| Stop / take profit | none | 1% / 3% | 0.75% / 4% |
+| Bars | 15Min | 5Min | 1Min |
+| SMAs | 20 / 50 | 9 / 21 | 5 / 20 |
+| Leverage cap | 1x | 4x | 4x |
+| Risk per trade | split evenly | 1% | 1% |
+| Stop / take profit | none | 0.5% / 1% | 0.4% / 0.8% |
 | Shorting | no | yes | yes |
 | Max positions | no limit | 3 | 2 |
 | Flat by 4pm | no | yes | yes |
+| Checks every | 60s | 30s | 15s |
 | Prop challenge rules | off | on | on |
 
-Every setting can be changed in the sidebar. With **risk per trade** set, position size is
+Every setting can be changed in the sidebar, but risk per trade is capped at **1%**. With **risk per trade** set, position size is
 `risk % ÷ stop %` of the account (2% risk with a 1% stop = a position worth 2x the account),
 capped by leverage.
+
+The faster the bot trades, the more trading costs matter: set **Trading cost per side %** to
+what your broker or prop firm really charges (spread + commission) before trusting a backtest.
 
 ## Prop challenge rules
 

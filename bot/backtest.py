@@ -6,7 +6,6 @@ import pandas as pd
 
 from bot.book import ACTIVE, Book, ChallengeRules, RiskConfig
 from bot.data import NY
-from bot.strategy import add_smas, crossovers
 
 
 @dataclass
@@ -19,19 +18,25 @@ class BacktestResult:
 class _Market:
     """Prices and signals as arrays so the simulation loop stays fast."""
 
-    def __init__(self, bars: dict[str, pd.DataFrame], short: int, long: int, intraday: bool):
-        closes, signals = {}, {}
+    def __init__(self, bars: dict[str, pd.DataFrame], strategy, intraday: bool):
+        cols = {k: {} for k in ("close", "high", "low", "signal", "stop_dist")}
         for sym, df in bars.items():
             if df.empty:
                 continue
-            df = add_smas(df, short, long)
-            closes[sym] = df["close"]
-            signals[sym] = crossovers(df)
-        prices = pd.DataFrame(closes).sort_index()
+            df = strategy.compute(df)
+            cols["close"][sym] = df["close"]
+            cols["high"][sym] = df["high"] if "high" in df else df["close"]
+            cols["low"][sym] = df["low"] if "low" in df else df["close"]
+            cols["signal"][sym] = df["signal"]
+            cols["stop_dist"][sym] = df["stop_dist"]
+        prices = pd.DataFrame(cols["close"]).sort_index()
         self.index = prices.index
         self.symbols = list(prices.columns)
         self.prices = prices.ffill().to_numpy()
-        self.signals = pd.DataFrame(signals).reindex(self.index).fillna("HOLD").to_numpy()
+        self.highs = pd.DataFrame(cols["high"]).reindex(self.index).to_numpy()
+        self.lows = pd.DataFrame(cols["low"]).reindex(self.index).to_numpy()
+        self.signals = pd.DataFrame(cols["signal"]).reindex(self.index).fillna("HOLD").to_numpy()
+        self.stops = pd.DataFrame(cols["stop_dist"]).reindex(self.index).to_numpy(dtype=float)
         local = self.index.tz_convert(NY) if self.index.tz is not None else self.index
         self.days = np.array([d.isoformat() for d in local.date])
         self.eod = np.zeros(len(self.index), dtype=bool)
@@ -50,23 +55,26 @@ class _Market:
         equity, trades = [], []
         n = len(self.symbols)
         for i in range(lo, hi):
-            row = self.prices[i]
-            prices = {s: p for s, p in zip(self.symbols, row) if not np.isnan(p)}
-            signals = {s: (sig, i) for s, sig in zip(self.symbols, self.signals[i])}
+            live = [(k, s) for k, s in enumerate(self.symbols) if not np.isnan(self.prices[i, k])]
+            prices = {s: self.prices[i, k] for k, s in live}
+            # Only symbols with a real bar this step have a range to check stops against.
+            highs = {s: self.highs[i, k] for k, s in live if not np.isnan(self.highs[i, k])}
+            lows = {s: self.lows[i, k] for k, s in live if not np.isnan(self.lows[i, k])}
+            signals = {s: (self.signals[i, k], i, self.stops[i, k]) for k, s in live
+                       if self.signals[i, k] != "HOLD"}
             trades += book.step(self.index[i], self.days[i], prices, signals, risk, rules, n,
-                                eod=risk.flatten_eod and self.eod[i])
+                                eod=risk.flatten_eod and self.eod[i], highs=highs, lows=lows)
             equity.append(book.equity(prices))
             if stop_when_done and book.status != ACTIVE:
                 break
         return equity, trades
 
 
-def run_backtest(bars: dict[str, pd.DataFrame], short: int, long: int, start,
-                 starting_cash: float = 10_000, risk: RiskConfig | None = None,
-                 intraday: bool = False) -> BacktestResult:
+def run_backtest(bars: dict[str, pd.DataFrame], strategy, start, starting_cash: float = 10_000,
+                 risk: RiskConfig | None = None, intraday: bool = False) -> BacktestResult:
     """Run the strategy from `start` to the end of the data with no challenge rules.
-    `bars` should include warm-up history before `start` so the SMAs are ready on day one."""
-    market = _Market(bars, short, long, intraday)
+    `bars` should include warm-up history before `start` so indicators are ready on day one."""
+    market = _Market(bars, strategy, intraday)
     lo = market.position(start)
     equity, trades = market.simulate(Book.new(starting_cash), lo, len(market.index),
                                      risk or RiskConfig(), ChallengeRules())
@@ -75,18 +83,18 @@ def run_backtest(bars: dict[str, pd.DataFrame], short: int, long: int, start,
     return BacktestResult(equity, trades, summarize(equity, trades, starting_cash))
 
 
-def run_challenges(bars: dict[str, pd.DataFrame], short: int, long: int, start,
-                   starting_cash: float, risk: RiskConfig, rules: ChallengeRules,
-                   intraday: bool = False, window_days: int = 30, every_n_days: int = 5) -> pd.DataFrame:
+def run_challenges(bars: dict[str, pd.DataFrame], strategy, start, starting_cash: float,
+                   risk: RiskConfig, rules: ChallengeRules, intraday: bool = False,
+                   window_days: int = 30, every_n_days: int = 5) -> pd.DataFrame:
     """Start a fresh prop challenge every `every_n_days` trading days and record how each
     one ends: PASSED (target hit), FAILED (a loss limit hit) or TIMEOUT (ran out of days)."""
-    market = _Market(bars, short, long, intraday)
+    market = _Market(bars, strategy, intraday)
     rules = ChallengeRules(**{**rules.__dict__, "enabled": True, "stop_on_pass": True})
     lo = market.position(start)
     first_bars = [i for i in range(lo, len(market.index)) if i == lo or market.days[i] != market.days[i - 1]]
     end_ts = market.index[-1] if len(market.index) else None
     rows = []
-    for k, i in enumerate(first_bars[::every_n_days]):
+    for i in first_bars[::every_n_days]:
         t0 = market.index[i]
         deadline = t0 + pd.Timedelta(days=window_days)
         if deadline > end_ts:
@@ -125,12 +133,15 @@ def max_drawdown(equity: pd.Series) -> float:
 def summarize(equity: pd.Series, trades: pd.DataFrame, starting_cash: float) -> dict:
     if equity.empty:
         return {"total_return_pct": 0.0, "cagr_pct": 0.0, "monthly_pct": 0.0, "max_drawdown_pct": 0.0,
-                "trades": 0, "closed_trades": 0, "win_rate_pct": 0.0, "final_value": starting_cash}
+                "trades": 0, "closed_trades": 0, "win_rate_pct": 0.0, "trades_per_day": 0.0,
+                "final_value": starting_cash}
     final = float(equity.iloc[-1])
     years = max((equity.index[-1] - equity.index[0]).days / 365.25, 1 / 365.25)
     growth = max(final / starting_cash, 0)
     closed = trades.dropna(subset=["pnl"])
     wins = int((closed["pnl"] > 0).sum())
+    entries = trades[trades["side"].isin(["BUY", "SHORT"])] if len(trades) else trades
+    trading_days = max(len(set(equity.index.date)), 1)
     return {
         "total_return_pct": (final / starting_cash - 1) * 100,
         "cagr_pct": (growth ** (1 / years) - 1) * 100,
@@ -139,5 +150,6 @@ def summarize(equity: pd.Series, trades: pd.DataFrame, starting_cash: float) -> 
         "trades": len(trades),
         "closed_trades": len(closed),
         "win_rate_pct": wins / len(closed) * 100 if len(closed) else 0.0,
+        "trades_per_day": len(entries) / trading_days,
         "final_value": final,
     }

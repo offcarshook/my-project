@@ -14,7 +14,8 @@ CLOCK_URL = "https://paper-api.alpaca.markets/v2/clock"
 NY = ZoneInfo("America/New_York")
 
 # Rough minutes per bar, used to size the history request.
-_TF_MINUTES = {"1Min": 1, "5Min": 5, "15Min": 15, "30Min": 30, "1Hour": 60, "1Day": 390}
+TF_MINUTES = {"1Min": 1, "5Min": 5, "15Min": 15, "30Min": 30, "1Hour": 60, "1Day": 390}
+COLUMNS = {"o": "open", "h": "high", "l": "low", "c": "close", "v": "volume"}
 
 
 class AlpacaData:
@@ -29,7 +30,7 @@ class AlpacaData:
         """Return the latest `limit` close prices per symbol, indexed by timestamp."""
         tf = self.settings.timeframe
         # Ask for enough calendar days to cover `limit` bars of regular trading.
-        trading_days = limit * _TF_MINUTES.get(tf, 15) / 390
+        trading_days = limit * TF_MINUTES.get(tf, 15) / 390
         start = datetime.now(timezone.utc) - timedelta(days=int(trading_days * 1.6) + 5)
         return {s: df.tail(limit) for s, df in self.get_history(symbols, start, tf).items()}
 
@@ -59,11 +60,11 @@ class AlpacaData:
         out = {}
         for sym, bars in rows.items():
             if not bars:
-                out[sym] = pd.DataFrame(columns=["close"])
+                out[sym] = pd.DataFrame(columns=list(COLUMNS.values()))
                 continue
             df = pd.DataFrame(bars)
             df["t"] = pd.to_datetime(df["t"])
-            df = df.set_index("t")[["c"]].rename(columns={"c": "close"})
+            df = df.set_index("t")[list(COLUMNS)].rename(columns=COLUMNS)
             out[sym] = regular_hours(df) if timeframe != "1Day" else df
         return out
 
@@ -83,7 +84,7 @@ class DemoData:
         self.settings = settings
 
     def get_bars(self, symbols: list[str], limit: int) -> dict[str, pd.DataFrame]:
-        minutes = _TF_MINUTES.get(self.settings.timeframe, 15)
+        minutes = TF_MINUTES.get(self.settings.timeframe, 15)
         now = pd.Timestamp.now(tz="UTC").floor(f"{minutes}min")
         index = pd.date_range(end=now, periods=limit, freq=f"{minutes}min")
         bucket = int(now.timestamp() // (minutes * 60))
@@ -92,8 +93,7 @@ class DemoData:
             # Seeded per symbol so history is stable; a new bar appears each period.
             rng = np.random.default_rng(zlib.crc32(sym.encode()))
             steps = rng.normal(0, 0.004, bucket % 100_000 + limit)[-limit:]
-            prices = self.BASE.get(sym, 100) * np.exp(np.cumsum(steps))
-            out[sym] = pd.DataFrame({"close": prices}, index=index)
+            out[sym] = _fake_candles(self.BASE.get(sym, 100), steps, index, rng)
         return out
 
     def get_history(self, symbols: list[str], start: datetime,
@@ -105,7 +105,7 @@ class DemoData:
         if timeframe == "1Day":
             index, per_day = days.tz_localize("UTC"), 1
         else:
-            minutes = _TF_MINUTES.get(timeframe, 15)
+            minutes = TF_MINUTES.get(timeframe, 15)
             per_day = 390 // minutes
             offsets = pd.to_timedelta(np.arange(per_day) * minutes, unit="min") + pd.Timedelta("9h30min")
             local = (days.values[:, None] + offsets.values[None, :]).ravel()
@@ -114,12 +114,25 @@ class DemoData:
         for sym in symbols:
             rng = np.random.default_rng(zlib.crc32(sym.encode()) + per_day)
             steps = rng.normal(0.0004 / per_day, 0.016 / np.sqrt(per_day), len(index))
-            prices = self.BASE.get(sym, 100) * np.exp(np.cumsum(steps) - steps.sum())
-            out[sym] = pd.DataFrame({"close": prices}, index=index)
+            base = self.BASE.get(sym, 100) * np.exp(-steps.sum())
+            out[sym] = _fake_candles(base, steps, index, rng)
         return out
 
     def market_is_open(self) -> bool:
         return True
+
+
+def _fake_candles(base: float, steps: np.ndarray, index: pd.DatetimeIndex, rng) -> pd.DataFrame:
+    close = base * np.exp(np.cumsum(steps))
+    open_ = np.concatenate([[base], close[:-1]])
+    wick = np.abs(rng.normal(0, steps.std() or 0.001, len(close))) * close * 0.6
+    return pd.DataFrame({
+        "open": open_,
+        "high": np.maximum(open_, close) + wick,
+        "low": np.minimum(open_, close) - wick,
+        "close": close,
+        "volume": rng.lognormal(10, 0.5, len(close)).round(),
+    }, index=index)
 
 
 def regular_hours(df: pd.DataFrame) -> pd.DataFrame:

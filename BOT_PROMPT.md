@@ -42,3 +42,9 @@ Build a basic trading bot with a dashboard, fed with live data, using paper trad
 - Max 1% risk per trade, 5% daily loss limit, 10% max drawdown
 - Trade more often instead of bigger: new ⚡ Scalper mode on 1-minute bars (default)
 - Degen mode removed; Aggressive lowered to 1% risk
+
+## v4: VWAP pullback strategy
+- 0.5% risk per trade, 5-10 trades per day, selective but not too picky
+- Trend (VWAP + EMA 9/21) -> pullback to the 9 EMA -> breakout candle, with a volume filter
+  and 9:45-15:30 time window; ATR-based stops, 2R targets, max 10 trades per day
+- Backtest checks stops on candle highs/lows and reports trades per day and break-even win rate

@@ -92,3 +92,39 @@ def test_challenge_sizing_respects_daily_room():
     [buy] = step(book, {"A": 100}, {"A": ("BUY", 1)}, risk, rules)
     worst_loss = buy["qty"] * 100 * 0.01
     assert worst_loss < 500
+
+
+def test_strategy_stop_distance_sets_size_stop_and_target():
+    risk = RiskConfig(leverage=4, risk_pct=0.5, reward_risk=2, slippage_pct=0)
+    book = Book.new(10_000)
+    [buy] = step(book, {"A": 100}, {"A": ("BUY", 1, 0.5)}, risk)
+    assert buy["qty"] == 100  # $50 risk / $0.50 stop distance
+    pos = book.positions["A"]
+    assert pos.stop == 99.5 and pos.target == 101
+
+
+def test_intrabar_stop_fills_at_stop_level():
+    risk = RiskConfig(risk_pct=0.5, reward_risk=2, leverage=4, slippage_pct=0)
+    book = Book.new(10_000)
+    step(book, {"A": 100}, {"A": ("BUY", 1, 0.5)}, risk)
+    # close is back above the stop, but the low went through it
+    [f] = book.step("t", "2026-01-05", {"A": 100.2}, {}, risk, OFF, 1, highs={"A": 100.3}, lows={"A": 99.4})
+    assert f["reason"] == "stop loss" and f["price"] == 99.5 and f["pnl"] == -50
+
+
+def test_both_stop_and_target_touched_counts_as_stop():
+    risk = RiskConfig(risk_pct=0.5, reward_risk=2, leverage=4, slippage_pct=0)
+    book = Book.new(10_000)
+    step(book, {"A": 100}, {"A": ("BUY", 1, 0.5)}, risk)
+    [f] = book.step("t", "2026-01-05", {"A": 100}, {}, risk, OFF, 1, highs={"A": 101.5}, lows={"A": 99})
+    assert f["reason"] == "stop loss"
+
+
+def test_max_trades_per_day():
+    risk = RiskConfig(max_trades_per_day=2, slippage_pct=0)
+    book = Book.new(3000)
+    signals = {s: ("BUY", 1) for s in "ABC"}
+    fills = step(book, {"A": 100, "B": 100, "C": 100}, signals, risk, n=3)
+    assert len(fills) == 2
+    fills = step(book, {"A": 100, "B": 100, "C": 100}, {"C": ("BUY", 2)}, risk, day="2026-01-06", n=3)
+    assert len(fills) == 1  # new day resets the count

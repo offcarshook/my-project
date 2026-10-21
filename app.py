@@ -1,4 +1,4 @@
-"""Streamlit dashboard for the SMA crossover paper trading bot.
+"""Streamlit dashboard for the paper trading bot.
 
 Run with:  streamlit run app.py
 """
@@ -11,22 +11,24 @@ import streamlit as st
 from bot.backtest import buy_and_hold, max_drawdown, run_backtest, run_challenges
 from bot.book import FAILED, PASSED, ChallengeRules, RiskConfig
 from bot.config import Settings
-from bot.data import DemoData, local_market_is_open, make_feed
+from bot.data import TF_MINUTES, DemoData, local_market_is_open, make_feed
 from bot.engine import run_tick
 from bot.paper import PaperAccount
+from bot.strategy import SmaCross, VwapPullback
 
-st.set_page_config(page_title="SMA Crossover Bot", page_icon="📈", layout="wide")
+st.set_page_config(page_title="Prop Trading Bot", page_icon="📈", layout="wide")
 
+VWAP, SMA = VwapPullback.name, SmaCross.name
 MODES = {
-    "🐢 Safe": dict(timeframe="15Min", short=20, long=50, leverage=1.0, risk_pct=0.0, stop_pct=0.0,
-                   take_profit_pct=0.0, allow_short=False, max_positions=0, flatten_eod=False,
-                   challenge=False, interval=60),
-    "🔥 Aggressive": dict(timeframe="5Min", short=9, long=21, leverage=4.0, risk_pct=1.0, stop_pct=0.5,
-                         take_profit_pct=1.0, allow_short=True, max_positions=3, flatten_eod=True,
-                         challenge=True, interval=30),
-    "⚡ Scalper": dict(timeframe="1Min", short=5, long=20, leverage=4.0, risk_pct=1.0, stop_pct=0.4,
-                      take_profit_pct=0.8, allow_short=True, max_positions=2, flatten_eod=True,
-                      challenge=True, interval=15),
+    "🎯 VWAP Pullback": dict(strategy=VWAP, timeframe="5Min", leverage=4.0, risk_pct=0.5, stop_pct=0.0,
+                            take_profit_pct=0.0, reward_risk=2.0, max_trades=10, allow_short=True,
+                            max_positions=3, flatten_eod=True, challenge=True, interval=30),
+    "⚡ SMA Scalper": dict(strategy=SMA, timeframe="1Min", short=5, long=20, leverage=4.0, risk_pct=0.5,
+                          stop_pct=0.4, take_profit_pct=0.0, reward_risk=2.0, max_trades=10,
+                          allow_short=True, max_positions=2, flatten_eod=True, challenge=True, interval=15),
+    "🐢 Safe": dict(strategy=SMA, timeframe="15Min", short=20, long=50, leverage=1.0, risk_pct=0.0,
+                   stop_pct=0.0, take_profit_pct=0.0, reward_risk=0.0, max_trades=0, allow_short=False,
+                   max_positions=0, flatten_eod=False, challenge=False, interval=60),
 }
 MAX_RISK_PCT = 1.0
 TIMEFRAMES = ["1Min", "5Min", "15Min", "30Min", "1Hour", "1Day"]
@@ -44,7 +46,7 @@ account = get_account(settings.db_path, settings.starting_cash)
 
 # ---- Sidebar controls ----
 st.sidebar.title("⚙️ Bot settings")
-mode = st.sidebar.radio("Mode", list(MODES), index=2, horizontal=True)
+mode = st.sidebar.radio("Mode", list(MODES), horizontal=True)
 d = MODES[mode]
 
 symbols = st.sidebar.multiselect(
@@ -55,24 +57,44 @@ extra = st.sidebar.text_input("Add symbols (comma separated)")
 symbols += [s.strip().upper() for s in extra.split(",") if s.strip() and s.strip().upper() not in symbols]
 
 with st.sidebar.expander("📊 Strategy", expanded=True):
+    st.markdown(f"**{d['strategy']}**")
     timeframe = st.selectbox("Bar size", TIMEFRAMES, index=TIMEFRAMES.index(d["timeframe"]),
                              key=f"tf_{mode}")
-    c1, c2 = st.columns(2)
-    short = c1.number_input("Short SMA", 2, 500, d["short"], key=f"short_{mode}")
-    long = c2.number_input("Long SMA", 3, 1000, d["long"], key=f"long_{mode}")
-if short >= long:
-    st.sidebar.error("Short SMA must be smaller than long SMA.")
-    st.stop()
+    if d["strategy"] == VWAP:
+        c1, c2 = st.columns(2)
+        fast = c1.number_input("Fast EMA", 2, 100, 9, key=f"fast_{mode}")
+        slow = c2.number_input("Slow EMA", 3, 300, 21, key=f"slow_{mode}")
+        rvol = st.slider("Min volume vs average", 0.0, 3.0, 1.2, 0.1, key=f"rvol_{mode}",
+                         help="Higher = pickier, fewer trades. 1.2 = bar volume at least 20% above normal")
+        if fast >= slow:
+            st.error("Fast EMA must be smaller than slow EMA.")
+            st.stop()
+        strategy = VwapPullback(fast, slow, rvol_min=rvol)
+    else:
+        c1, c2 = st.columns(2)
+        short = c1.number_input("Short SMA", 2, 500, d["short"], key=f"short_{mode}")
+        long = c2.number_input("Long SMA", 3, 1000, d["long"], key=f"long_{mode}")
+        if short >= long:
+            st.error("Short SMA must be smaller than long SMA.")
+            st.stop()
+        strategy = SmaCross(short, long)
 
 with st.sidebar.expander("⚡ Risk", expanded=mode != "🐢 Safe"):
-    leverage = st.slider("Leverage", 1.0, 20.0, d["leverage"], 0.5, key=f"lev_{mode}")
     risk_pct = st.slider("Risk per trade (% of account)", 0.0, MAX_RISK_PCT, d["risk_pct"], 0.1,
                          key=f"risk_{mode}", help="Capped at 1%. 0 = split cash evenly across the watchlist")
-    stop_pct = st.slider("Stop loss %", 0.0, 5.0, d["stop_pct"], 0.05, key=f"stop_{mode}")
-    tp_pct = st.slider("Take profit %", 0.0, 10.0, d["take_profit_pct"], 0.05, key=f"tp_{mode}")
-    allow_short = st.toggle("Short on sell signals", d["allow_short"], key=f"short_on_{mode}")
+    if d["strategy"] == VWAP:
+        st.caption("Stops come from the strategy (just past the pullback, 0.5–2 ATR).")
+        stop_pct = 0.0
+    else:
+        stop_pct = st.slider("Stop loss %", 0.0, 5.0, d["stop_pct"], 0.05, key=f"stop_{mode}")
+    reward_risk = st.slider("Target (x the risk)", 0.0, 5.0, d["reward_risk"], 0.25, key=f"rr_{mode}",
+                            help="2 = aim to win twice what you risk. 0 = no target")
+    max_trades = st.number_input("Max new trades per day (0 = no limit)", 0, 100, d["max_trades"],
+                                 key=f"maxtr_{mode}")
     max_positions = st.number_input("Max open positions (0 = no limit)", 0, 20, d["max_positions"],
                                     key=f"maxpos_{mode}")
+    leverage = st.slider("Leverage cap", 1.0, 10.0, d["leverage"], 0.5, key=f"lev_{mode}")
+    allow_short = st.toggle("Short on sell signals", d["allow_short"], key=f"short_on_{mode}")
     flatten_eod = st.toggle("Close everything before 4pm", d["flatten_eod"], key=f"eod_{mode}")
     slippage = st.number_input("Trading cost per side %", 0.0, 1.0, settings.slippage_pct, 0.01,
                                format="%.2f", help="Spread + slippage + fees, paid on entry and exit")
@@ -84,8 +106,9 @@ with st.sidebar.expander("🏆 Prop challenge rules", expanded=d["challenge"]):
     max_dd = st.number_input("Max total loss %", 1.0, 90.0, 10.0, 0.5)
     window = st.number_input("Days to pass", 5, 120, 30)
 
-risk = RiskConfig(leverage, risk_pct, stop_pct, tp_pct, allow_short, int(max_positions), flatten_eod,
-                  slippage)
+risk = RiskConfig(leverage=leverage, risk_pct=risk_pct, stop_pct=stop_pct, reward_risk=reward_risk,
+                  max_trades_per_day=int(max_trades), allow_short=allow_short,
+                  max_positions=int(max_positions), flatten_eod=flatten_eod, slippage_pct=slippage)
 rules = ChallengeRules(challenge_on, target, daily_loss, max_dd)
 intraday = timeframe != "1Day"
 
@@ -103,8 +126,8 @@ with st.sidebar.expander("Reset paper account"):
         st.success("Account reset.")
 
 # ---- Header ----
-st.title("📈 SMA Crossover Paper Trading Bot")
-st.caption(f"{mode} · SMA{short}/{long} on {timeframe} bars · {leverage:g}x leverage · "
+st.title("📈 Prop Challenge Paper Trading Bot")
+st.caption(f"{mode} · {strategy.name} on {timeframe} bars · {risk_pct:g}% risk per trade · "
            f"{'longs + shorts' if allow_short else 'longs only'} · paper money only")
 if not settings.has_alpaca_keys:
     st.warning("No Alpaca keys found — showing **demo data** (random prices). "
@@ -112,9 +135,6 @@ if not settings.has_alpaca_keys:
 if risk_pct and stop_pct and stop_pct < 10 * slippage:
     st.caption(f"⚠️ A {stop_pct:g}% stop is tight next to {2 * slippage:g}% of trading costs "
                "per round trip. Fees eat a big chunk of every win at this speed.")
-if leverage > 4:
-    st.caption("💀 Over 4x is more than a US stock broker allows intraday. Prop CFD accounts can go "
-               "higher, and here it's all fake money anyway.")
 
 
 def market_open() -> bool:
@@ -156,7 +176,7 @@ def live_panel():
         st.info("Pick at least one symbol in the sidebar.")
         return
     is_open = market_open()
-    result = run_tick(feed, account, symbols, short, long, is_open, risk, rules, intraday, trade=running)
+    result = run_tick(feed, account, symbols, strategy, is_open, risk, rules, timeframe, trade=running)
 
     for err in result.errors:
         st.error(err)
@@ -172,7 +192,9 @@ def live_panel():
     c1.metric("Portfolio value", money(equity), f"{equity - book.starting_cash:+,.2f}")
     c2.metric("Exposure", money(exposure), f"{exposure / equity:.1f}x of equity" if equity > 0 else None,
               delta_color="off")
-    c3.metric("Open positions", len(book.positions))
+    c3.metric("Open positions", len(book.positions),
+              f"{book.trades_today} trades today" + (f" / {max_trades} max" if max_trades else ""),
+              delta_color="off")
     c4.metric("Market", "🟢 Open" if is_open else "🔴 Closed", "bot running" if running else "bot paused",
               delta_color="normal" if running else "off")
     if running and not is_open:
@@ -185,24 +207,25 @@ def live_panel():
     for sym, df in result.bars.items():
         last = df.iloc[-1]
         pos = book.positions.get(sym)
+        price = result.prices.get(sym, last["close"])
+        cols = list(strategy.lines)
         rows.append({
             "Symbol": sym,
-            "Price": last["close"],
-            f"SMA{short}": last["sma_short"],
-            f"SMA{long}": last["sma_long"],
-            "Trend": "⬆️ up" if last["sma_short"] > last["sma_long"] else "⬇️ down",
+            "Price": price,
+            **{strategy.lines[c]: last[c] for c in cols},
+            "Trend": "⬆️ up" if last[cols[-2]] > last[cols[-1]] else "⬇️ down",
             "Signal": result.signals.get(sym, "HOLD"),
             "Position": ("🟢 LONG " if pos.qty > 0 else "🔴 SHORT ") + f"{abs(pos.qty):g}" if pos else "—",
             "Entry": pos.entry if pos else None,
             "Stop": pos.stop if pos else None,
             "Target": pos.target if pos else None,
-            "Unrealized P&L": (last["close"] - pos.entry) * pos.qty if pos else 0.0,
+            "Unrealized P&L": (price - pos.entry) * pos.qty if pos else 0.0,
         })
     if rows:
         st.subheader("Watchlist")
         st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch",
                      column_config={c: st.column_config.NumberColumn(format="$%.2f")
-                                    for c in ["Price", f"SMA{short}", f"SMA{long}", "Entry", "Stop",
+                                    for c in ["Price", *strategy.lines.values(), "Entry", "Stop",
                                               "Target", "Unrealized P&L"]})
 
     if result.bars:
@@ -210,9 +233,13 @@ def live_panel():
         sym = st.selectbox("Symbol", list(result.bars), key="chart_symbol")
         df = result.bars[sym]
         fig = go.Figure()
-        fig.add_scatter(x=df.index, y=df["close"], name="Price", line=dict(width=1.5))
-        fig.add_scatter(x=df.index, y=df["sma_short"], name=f"SMA{short}", line=dict(width=1.5))
-        fig.add_scatter(x=df.index, y=df["sma_long"], name=f"SMA{long}", line=dict(width=1.5))
+        if {"open", "high", "low"} <= set(df.columns):
+            fig.add_candlestick(x=df.index, open=df["open"], high=df["high"], low=df["low"],
+                                close=df["close"], name="Price")
+        else:
+            fig.add_scatter(x=df.index, y=df["close"], name="Price", line=dict(width=1.5))
+        for col, label in strategy.lines.items():
+            fig.add_scatter(x=df.index, y=df[col], name=label, line=dict(width=1.5))
         trades = [t for t in account.trades() if t["symbol"] == sym]
         for sides, color, marker, name in [(("BUY", "COVER"), "#16a34a", "triangle-up", "Buy / cover"),
                                            (("SELL", "SHORT"), "#dc2626", "triangle-down", "Sell / short")]:
@@ -221,7 +248,7 @@ def live_panel():
                 fig.add_scatter(x=pd.to_datetime([t["ts"] for t in pts], utc=True),
                                 y=[t["price"] for t in pts], mode="markers", name=name,
                                 marker=dict(symbol=marker, size=13, color=color))
-        fig.update_layout(height=450, margin=dict(l=10, r=10, t=10, b=10),
+        fig.update_layout(height=450, margin=dict(l=10, r=10, t=10, b=10), xaxis_rangeslider_visible=False,
                           legend=dict(orientation="h", y=1.02, x=0), hovermode="x unified")
         st.plotly_chart(fig, width="stretch")
 
@@ -233,7 +260,7 @@ def live_panel():
                      column_config={"price": st.column_config.NumberColumn(format="$%.2f"),
                                     "pnl": st.column_config.NumberColumn("realized P&L", format="$%.2f")})
     else:
-        st.caption("No trades yet. Turn the bot on and wait for a crossover.")
+        st.caption("No trades yet. Turn the bot on and wait for a setup.")
 
 
 @st.cache_data(ttl=3600, show_spinner="Downloading price history...")
@@ -249,7 +276,8 @@ def pct(x: float) -> str:
 
 def backtest_panel():
     st.caption(f"Replays the exact rules from the sidebar ({mode}, {timeframe} bars) on past prices. "
-               "Stops and targets are checked on bar closes, so real fills can be worse.")
+               "Stops and targets trigger on each bar's high/low and fill at their level, so a gap "
+               "through a stop is filled better than it would be for real.")
     c1, c2 = st.columns([2, 1])
     # 1-minute history is huge, so keep those backtests shorter.
     max_months, default_months = {"1Day": (96, 60), "1Min": (6, 2)}.get(timeframe, (24, 6))
@@ -266,9 +294,8 @@ def backtest_panel():
 
     start = (datetime.now(timezone.utc) - timedelta(days=int(months * 30.44))).replace(
         hour=0, minute=0, second=0, microsecond=0)
-    bars_per_day = 1 if not intraday else max(390 // {"1Min": 1, "5Min": 5, "15Min": 15, "30Min": 30,
-                                                      "1Hour": 60}[timeframe], 1)
-    warmup_days = int(long / bars_per_day * 1.6) + 10
+    bars_per_day = 1 if not intraday else max(390 // TF_MINUTES[timeframe], 1)
+    warmup_days = int(strategy.warmup / bars_per_day * 1.6) + 10
     fetch_start = start - timedelta(days=warmup_days)
     try:
         bars = load_history(tuple(sorted(set(symbols) | {BENCHMARK})), fetch_start, timeframe,
@@ -284,8 +311,8 @@ def backtest_panel():
         return
 
     with st.spinner("Simulating..."):
-        main = run_backtest(traded, short, long, start, cash, risk, intraday)
-        challenges = run_challenges(traded, short, long, start, cash, risk, rules, intraday,
+        main = run_backtest(traded, strategy, start, cash, risk, intraday)
+        challenges = run_challenges(traded, strategy, start, cash, risk, rules, intraday,
                                     window_days=int(window), every_n_days=1 if months <= 12 else 5)
 
     bench = buy_and_hold(bars[BENCHMARK]["close"], start, cash) if BENCHMARK in bars else pd.Series()
@@ -338,14 +365,16 @@ def backtest_panel():
     k1.metric("Strategy return", pct(m["total_return_pct"]),
               f"{m['total_return_pct'] - bench_ret:+.1f} pts vs QQQ")
     k2.metric("Avg month", pct(m["monthly_pct"]))
-    k3.metric("Buy & hold QQQ", pct(bench_ret))
+    k3.metric("Trades per day", f"{m['trades_per_day']:.1f}")
     k4.metric("Worst drop", f"{m['max_drawdown_pct']:.1f}%",
               f"QQQ {max_drawdown(bench):.1f}%" if not bench.empty else None, delta_color="off")
-    k5.metric("Win rate", f"{m['win_rate_pct']:.0f}%", f"{m['closed_trades']} closed trades",
+    breakeven = 100 / (1 + reward_risk) if reward_risk else None
+    k5.metric("Win rate", f"{m['win_rate_pct']:.0f}%",
+              f"need >{breakeven:.0f}% before fees" if breakeven else f"{m['closed_trades']} closed trades",
               delta_color="off")
 
     fig = go.Figure()
-    fig.add_scatter(x=main.equity.index, y=main.equity, name=f"{mode} SMA{short}/{long}", line=dict(width=2))
+    fig.add_scatter(x=main.equity.index, y=main.equity, name=f"{mode}", line=dict(width=2))
     if not bench.empty:
         fig.add_scatter(x=bench.index, y=bench, name="Buy & hold QQQ",
                         line=dict(width=2, dash="dot", color="#6b7280"))

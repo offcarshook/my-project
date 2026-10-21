@@ -1,30 +1,47 @@
-# 📈 SMA Crossover Paper Trading Bot
+# 📈 Prop Challenge Paper Trading Bot
 
-A stock/ETF trading bot with a Streamlit dashboard. It compares a short moving average with
-a long one, **buys when the short crosses above the long** and **sells (or shorts) when it
-crosses back below**. Paper money only, so nothing real is at risk.
+A stock/ETF day-trading bot with a Streamlit dashboard, built to practice passing a prop firm
+challenge with paper money. Nothing real is at risk.
+
+## Strategies
+
+### 🎯 VWAP Pullback (default)
+
+Trades with the intraday trend, after a pullback, on 5-minute candles:
+
+1. **Trend:** price above the session VWAP, 9 EMA above 21 EMA, 21 EMA rising (shorts: the mirror image)
+2. **Pullback:** in the last 3 bars, price dipped back to the 9 EMA
+3. **Trigger:** a green candle that closes above the previous candle's high
+4. **Filters:** volume at least 1.2x its 20-bar average, only between 9:45 and 15:30 New York time
+5. **Stop:** just past the pullback low/high, kept between 0.5 and 2 ATR
+6. **Target:** 2x the risk; everything is closed before 4pm
+
+### ⚡ SMA Scalper / 🐢 Safe
+
+The original moving average crossover: buy when the short SMA crosses above the long one,
+sell (or short) when it crosses back below.
 
 ## Modes
 
-| | 🐢 Safe | 🔥 Aggressive | ⚡ Scalper (default) |
+| | 🎯 VWAP Pullback | ⚡ SMA Scalper | 🐢 Safe |
 | --- | --- | --- | --- |
-| Bars | 15Min | 5Min | 1Min |
-| SMAs | 20 / 50 | 9 / 21 | 5 / 20 |
-| Leverage cap | 1x | 4x | 4x |
-| Risk per trade | split evenly | 1% | 1% |
-| Stop / take profit | none | 0.5% / 1% | 0.4% / 0.8% |
-| Shorting | no | yes | yes |
-| Max positions | no limit | 3 | 2 |
-| Flat by 4pm | no | yes | yes |
-| Checks every | 60s | 30s | 15s |
-| Prop challenge rules | off | on | on |
+| Bars | 5Min | 1Min | 15Min |
+| Risk per trade | 0.5% | 0.5% | split evenly |
+| Stop | from the strategy (0.5–2 ATR) | 0.4% | none |
+| Target | 2x risk | 2x risk | none |
+| Max trades per day | 10 | 10 | no limit |
+| Max open positions | 3 | 2 | no limit |
+| Shorting | yes | yes | no |
+| Flat by 4pm | yes | yes | no |
+| Prop challenge rules | on | on | off |
 
-Every setting can be changed in the sidebar, but risk per trade is capped at **1%**. With **risk per trade** set, position size is
-`risk % ÷ stop %` of the account (2% risk with a 1% stop = a position worth 2x the account),
-capped by leverage.
+Every setting can be changed in the sidebar; risk per trade is capped at **1%**. Position
+size is `risk ÷ stop distance`, capped by the leverage limit (4x by default). The **min volume**
+slider controls how picky the VWAP strategy is: raise it for fewer trades.
 
-The faster the bot trades, the more trading costs matter: set **Trading cost per side %** to
-what your broker or prop firm really charges (spread + commission) before trusting a backtest.
+**Break-even math:** with a 2x target you need to win more than 1 in 3 trades just to break
+even before fees. The backtest shows your win rate next to that line. Set **Trading cost per
+side %** to what your broker or prop firm really charges (spread + commission).
 
 ## Prop challenge rules
 
@@ -35,11 +52,13 @@ Default: **+8% profit target, -5% max daily loss, -10% max total loss, 30 days**
 - Daily loss is measured from the previous close, so overnight gaps count.
 - New positions are sized down so a single stop-out can't break a limit on its own.
 - Rules are checked on bar closes. A real firm checks every tick, so they're a bit stricter.
+- New trades stop after the daily trade limit, and only finished candles can trigger a trade.
 
 - **Markets:** ETFs (QQQ, SPY, VOO) and Nasdaq stocks (AAPL, MSFT, NVDA, AMZN, TSLA) by default, editable from the dashboard
 - **Data:** [Alpaca Market Data API](https://alpaca.markets) (free IEX feed). Without keys it runs on random demo prices
 - **Paper account:** $10k virtual cash, one position per symbol, 0.05% simulated slippage, saved in SQLite
 - **Market hours:** only trades while the US market is open (Alpaca clock, falls back to 9:30–16:00 ET on weekdays)
+- **Data:** full candles (open, high, low, close, volume), regular trading hours only for intraday bars
 
 ## Setup
 
@@ -61,7 +80,7 @@ exact sidebar settings (mode, bar size, leverage, stops…) on past prices and s
 
 - **Prop challenge simulator:** starts a fresh challenge on every trading day (every 5th day
   for long periods) and reports the pass rate, blown accounts, timeouts and average days to pass
-- total return, average month, worst drop, win rate and a monthly returns chart
+- total return, average month, trades per day, worst drop, win rate vs break-even and a monthly returns chart
 - a comparison against simply **buying and holding QQQ**
 - realized P&L per symbol and the full trade list
 
@@ -73,7 +92,7 @@ Intraday backtests go back up to 24 months, daily ones up to 8 years.
 | --- | --- |
 | `app.py` | Streamlit dashboard |
 | `bot/data.py` | Alpaca bars + market clock, demo feed |
-| `bot/strategy.py` | SMA calculation and crossover signals |
+| `bot/strategy.py` | VWAP pullback and SMA crossover strategies |
 | `bot/book.py` | Positions, leverage, stops, shorting, challenge rules (shared by live + backtest) |
 | `bot/paper.py` | Saves the live book to SQLite between ticks |
 | `bot/engine.py` | One bot tick: fetch → signal → trade |

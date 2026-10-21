@@ -1,13 +1,40 @@
 # 📈 SMA Crossover Paper Trading Bot
 
-A basic stock/ETF trading bot with a Streamlit dashboard. It compares a short moving
-average with a long one, **buys when the short crosses above the long** and **sells when it
+A stock/ETF trading bot with a Streamlit dashboard. It compares a short moving average with
+a long one, **buys when the short crosses above the long** and **sells (or shorts) when it
 crosses back below**. Paper money only, so nothing real is at risk.
+
+## Modes
+
+| | 🐢 Safe | 🔥 Aggressive (default) | 💀 Degen |
+| --- | --- | --- | --- |
+| Bars | 15Min | 5Min | 5Min |
+| SMAs | 20 / 50 | 9 / 21 | 5 / 13 |
+| Leverage | 1x | 4x | 10x |
+| Risk per trade | split evenly | 2% | 3% |
+| Stop / take profit | none | 1% / 3% | 0.75% / 4% |
+| Shorting | no | yes | yes |
+| Max positions | no limit | 3 | 2 |
+| Flat by 4pm | no | yes | yes |
+| Prop challenge rules | off | on | on |
+
+Every setting can be changed in the sidebar. With **risk per trade** set, position size is
+`risk % ÷ stop %` of the account (2% risk with a 1% stop = a position worth 2x the account),
+capped by leverage.
+
+## Prop challenge rules
+
+Default: **+8% profit target, -5% max daily loss, -10% max total loss, 30 days**. All editable.
+
+- Hitting the target passes the challenge and closes everything.
+- Breaking either loss limit fails it, closes everything, and stops the bot until you reset.
+- Daily loss is measured from the previous close, so overnight gaps count.
+- New positions are sized down so a single stop-out can't break a limit on its own.
+- Rules are checked on bar closes. A real firm checks every tick, so they're a bit stricter.
 
 - **Markets:** ETFs (QQQ, SPY, VOO) and Nasdaq stocks (AAPL, MSFT, NVDA, AMZN, TSLA) by default, editable from the dashboard
 - **Data:** [Alpaca Market Data API](https://alpaca.markets) (free IEX feed). Without keys it runs on random demo prices
-- **Strategy:** SMA 20/50 by default, with a 50/200 "golden cross" preset or custom windows
-- **Paper account:** $10k virtual cash, long only, one position per symbol, budget split evenly across the watchlist, 0.05% simulated slippage, saved in SQLite
+- **Paper account:** $10k virtual cash, one position per symbol, 0.05% simulated slippage, saved in SQLite
 - **Market hours:** only trades while the US market is open (Alpaca clock, falls back to 9:30–16:00 ET on weekdays)
 
 ## Setup
@@ -25,16 +52,16 @@ logs each paper trade.
 
 ## Backtest
 
-Open the **🧪 Backtest** tab, pick how many years (1–8) and hit **Run backtest**. It replays the
-same rules on daily bars for your watchlist and shows:
+Open the **🧪 Backtest** tab, pick how many months and hit **Run backtest**. It replays the
+exact sidebar settings (mode, bar size, leverage, stops…) on past prices and shows:
 
-- total return, yearly return (CAGR), worst drop (max drawdown) and win rate
+- **Prop challenge simulator:** starts a fresh challenge on every trading day (every 5th day
+  for long periods) and reports the pass rate, blown accounts, timeouts and average days to pass
+- total return, average month, worst drop, win rate and a monthly returns chart
 - a comparison against simply **buying and holding QQQ**
-- your selected SMA settings next to the 20/50 and 50/200 presets
 - realized P&L per symbol and the full trade list
 
-Daily bars are used so years of history download fast. The live bot defaults to 15-minute
-bars; set `TIMEFRAME=1Day` in `.env` if you want it to trade exactly what you backtested.
+Intraday backtests go back up to 24 months, daily ones up to 8 years.
 
 ## Layout
 
@@ -43,10 +70,11 @@ bars; set `TIMEFRAME=1Day` in `.env` if you want it to trade exactly what you ba
 | `app.py` | Streamlit dashboard |
 | `bot/data.py` | Alpaca bars + market clock, demo feed |
 | `bot/strategy.py` | SMA calculation and crossover signals |
-| `bot/paper.py` | SQLite paper account (cash, positions, trades) |
+| `bot/book.py` | Positions, leverage, stops, shorting, challenge rules (shared by live + backtest) |
+| `bot/paper.py` | Saves the live book to SQLite between ticks |
 | `bot/engine.py` | One bot tick: fetch → signal → trade |
-| `bot/backtest.py` | Historical replay, buy-and-hold benchmark, metrics |
+| `bot/backtest.py` | Historical replay, challenge simulator, buy-and-hold benchmark |
 | `tests/` | `python -m pytest` |
 
 > This is an educational toy, not financial advice. SMA crossovers lag the price and get
-> chopped up in sideways markets.
+> chopped up in sideways markets, and leverage makes both of those hurt more.

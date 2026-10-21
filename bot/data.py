@@ -63,7 +63,8 @@ class AlpacaData:
                 continue
             df = pd.DataFrame(bars)
             df["t"] = pd.to_datetime(df["t"])
-            out[sym] = df.set_index("t")[["c"]].rename(columns={"c": "close"})
+            df = df.set_index("t")[["c"]].rename(columns={"c": "close"})
+            out[sym] = regular_hours(df) if timeframe != "1Day" else df
         return out
 
     def market_is_open(self) -> bool:
@@ -76,7 +77,7 @@ class DemoData:
     """Random-walk prices so the dashboard works before you have API keys."""
 
     BASE = {"QQQ": 480, "SPY": 560, "VOO": 515, "AAPL": 225, "MSFT": 430,
-            "NVDA": 130, "AMZN": 190, "TSLA": 250}
+            "NVDA": 130, "AMZN": 190, "TSLA": 250, "TQQQ": 75, "SQQQ": 9, "SOXL": 30}
 
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -97,19 +98,37 @@ class DemoData:
 
     def get_history(self, symbols: list[str], start: datetime,
                     timeframe: str = "1Day") -> dict[str, pd.DataFrame]:
-        """Daily random walk with a slight upward drift, from `start` until today."""
-        index = pd.bdate_range(start=pd.Timestamp(start).tz_convert("UTC").normalize(),
-                               end=pd.Timestamp.now(tz="UTC").normalize())
+        """Random walk with a slight upward drift, from `start` until today.
+        Intraday timeframes only produce regular-hours bars, like the real feed after filtering."""
+        days = pd.bdate_range(start=pd.Timestamp(start).tz_convert(NY).normalize().tz_localize(None),
+                              end=pd.Timestamp.now(tz=NY).normalize().tz_localize(None))
+        if timeframe == "1Day":
+            index, per_day = days.tz_localize("UTC"), 1
+        else:
+            minutes = _TF_MINUTES.get(timeframe, 15)
+            per_day = 390 // minutes
+            offsets = pd.to_timedelta(np.arange(per_day) * minutes, unit="min") + pd.Timedelta("9h30min")
+            local = (days.values[:, None] + offsets.values[None, :]).ravel()
+            index = pd.DatetimeIndex(local).tz_localize(NY).tz_convert("UTC")
         out = {}
         for sym in symbols:
-            rng = np.random.default_rng(zlib.crc32(sym.encode()) + 1)
-            steps = rng.normal(0.0004, 0.016, len(index))
+            rng = np.random.default_rng(zlib.crc32(sym.encode()) + per_day)
+            steps = rng.normal(0.0004 / per_day, 0.016 / np.sqrt(per_day), len(index))
             prices = self.BASE.get(sym, 100) * np.exp(np.cumsum(steps) - steps.sum())
             out[sym] = pd.DataFrame({"close": prices}, index=index)
         return out
 
     def market_is_open(self) -> bool:
         return True
+
+
+def regular_hours(df: pd.DataFrame) -> pd.DataFrame:
+    """Keep only bars that start between 9:30 and 16:00 New York time."""
+    if df.empty:
+        return df
+    local = df.index.tz_convert(NY)
+    mins = local.hour * 60 + local.minute
+    return df[(mins >= 570) & (mins < 960)]
 
 
 def local_market_is_open(now: datetime | None = None) -> bool:

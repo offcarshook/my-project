@@ -31,3 +31,9 @@ Build a basic trading bot with a dashboard, fed with live data, using paper trad
 
 ## Config
 - API keys (`ALPACA_API_KEY`, `ALPACA_SECRET_KEY`) via `.env`, never committed
+
+## v2: aggressive mode for prop firm challenges
+- Goal: pass a prop challenge (+8% in 30 days, max -5% per day, -10% total), paper only
+- Modes: Safe / Aggressive / Degen with leverage, risk-per-trade sizing, stop loss,
+  take profit, shorting, max positions and flatten-before-close
+- Backtest runs a challenge simulator over rolling 30-day windows and reports the pass rate

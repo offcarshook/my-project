@@ -8,7 +8,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from bot.backtest import buy_and_hold, max_drawdown, run_backtest
+from bot.backtest import buy_and_hold, max_drawdown, run_backtest, run_challenges
+from bot.book import FAILED, PASSED, ChallengeRules, RiskConfig
 from bot.config import Settings
 from bot.data import DemoData, local_market_is_open, make_feed
 from bot.engine import run_tick
@@ -16,19 +17,35 @@ from bot.paper import PaperAccount
 
 st.set_page_config(page_title="SMA Crossover Bot", page_icon="📈", layout="wide")
 
+MODES = {
+    "🐢 Safe": dict(timeframe="15Min", short=20, long=50, leverage=1.0, risk_pct=0.0, stop_pct=0.0,
+                   take_profit_pct=0.0, allow_short=False, max_positions=0, flatten_eod=False,
+                   challenge=False),
+    "🔥 Aggressive": dict(timeframe="5Min", short=9, long=21, leverage=4.0, risk_pct=2.0, stop_pct=1.0,
+                         take_profit_pct=3.0, allow_short=True, max_positions=3, flatten_eod=True,
+                         challenge=True),
+    "💀 Degen": dict(timeframe="5Min", short=5, long=13, leverage=10.0, risk_pct=3.0, stop_pct=0.75,
+                    take_profit_pct=4.0, allow_short=True, max_positions=2, flatten_eod=True,
+                    challenge=True),
+}
+TIMEFRAMES = ["1Min", "5Min", "15Min", "30Min", "1Hour", "1Day"]
+BENCHMARK = "QQQ"
+
 settings = Settings()
 
 
 @st.cache_resource
-def get_account(db_path: str, starting_cash: float, slippage: float) -> PaperAccount:
-    return PaperAccount(db_path, starting_cash, slippage)
+def get_account(db_path: str, starting_cash: float) -> PaperAccount:
+    return PaperAccount(db_path, starting_cash)
 
 
-account = get_account(settings.db_path, settings.starting_cash, settings.slippage_pct)
-feed = make_feed(settings)
+account = get_account(settings.db_path, settings.starting_cash)
 
 # ---- Sidebar controls ----
 st.sidebar.title("⚙️ Bot settings")
+mode = st.sidebar.radio("Mode", list(MODES), index=1, horizontal=True)
+d = MODES[mode]
+
 symbols = st.sidebar.multiselect(
     "Watchlist (ETFs + Nasdaq)", options=sorted(set(settings.watchlist + list(DemoData.BASE))),
     default=settings.watchlist,
@@ -36,17 +53,41 @@ symbols = st.sidebar.multiselect(
 extra = st.sidebar.text_input("Add symbols (comma separated)")
 symbols += [s.strip().upper() for s in extra.split(",") if s.strip() and s.strip().upper() not in symbols]
 
-preset = st.sidebar.radio("SMA preset", ["20 / 50", "50 / 200 (golden cross)", "Custom"])
-if preset == "20 / 50":
-    short, long = 20, 50
-elif preset.startswith("50 / 200"):
-    short, long = 50, 200
-else:
-    short = st.sidebar.number_input("Short SMA", 2, 500, settings.short_window)
-    long = st.sidebar.number_input("Long SMA", 3, 1000, settings.long_window)
+with st.sidebar.expander("📊 Strategy", expanded=True):
+    timeframe = st.selectbox("Bar size", TIMEFRAMES, index=TIMEFRAMES.index(d["timeframe"]),
+                             key=f"tf_{mode}")
+    c1, c2 = st.columns(2)
+    short = c1.number_input("Short SMA", 2, 500, d["short"], key=f"short_{mode}")
+    long = c2.number_input("Long SMA", 3, 1000, d["long"], key=f"long_{mode}")
 if short >= long:
     st.sidebar.error("Short SMA must be smaller than long SMA.")
     st.stop()
+
+with st.sidebar.expander("⚡ Risk", expanded=mode != "🐢 Safe"):
+    leverage = st.slider("Leverage", 1.0, 20.0, d["leverage"], 0.5, key=f"lev_{mode}")
+    risk_pct = st.slider("Risk per trade (% of account)", 0.0, 10.0, d["risk_pct"], 0.25,
+                         key=f"risk_{mode}", help="0 = split cash evenly across the watchlist")
+    stop_pct = st.slider("Stop loss %", 0.0, 5.0, d["stop_pct"], 0.25, key=f"stop_{mode}")
+    tp_pct = st.slider("Take profit %", 0.0, 10.0, d["take_profit_pct"], 0.25, key=f"tp_{mode}")
+    allow_short = st.toggle("Short on sell signals", d["allow_short"], key=f"short_on_{mode}")
+    max_positions = st.number_input("Max open positions (0 = no limit)", 0, 20, d["max_positions"],
+                                    key=f"maxpos_{mode}")
+    flatten_eod = st.toggle("Close everything before 4pm", d["flatten_eod"], key=f"eod_{mode}")
+
+with st.sidebar.expander("🏆 Prop challenge rules", expanded=d["challenge"]):
+    challenge_on = st.toggle("Enforce challenge rules", d["challenge"], key=f"ch_{mode}")
+    target = st.number_input("Profit target %", 1.0, 100.0, 8.0, 0.5)
+    daily_loss = st.number_input("Max daily loss %", 0.5, 50.0, 5.0, 0.5)
+    max_dd = st.number_input("Max total loss %", 1.0, 90.0, 10.0, 0.5)
+    window = st.number_input("Days to pass", 5, 120, 30)
+
+risk = RiskConfig(leverage, risk_pct, stop_pct, tp_pct, allow_short, int(max_positions), flatten_eod,
+                  settings.slippage_pct)
+rules = ChallengeRules(challenge_on, target, daily_loss, max_dd)
+intraday = timeframe != "1Day"
+
+settings.timeframe = timeframe
+feed = make_feed(settings)
 
 running = st.sidebar.toggle("▶️ Bot running", value=False)
 interval = st.sidebar.select_slider("Check every (seconds)", [15, 30, 60, 120, 300], value=60)
@@ -59,11 +100,14 @@ with st.sidebar.expander("Reset paper account"):
 
 # ---- Header ----
 st.title("📈 SMA Crossover Paper Trading Bot")
-st.caption(f"Buy when SMA{short} crosses above SMA{long}, sell when it crosses back below · "
-           f"{settings.timeframe} bars · paper money only")
+st.caption(f"{mode} · SMA{short}/{long} on {timeframe} bars · {leverage:g}x leverage · "
+           f"{'longs + shorts' if allow_short else 'longs only'} · paper money only")
 if not settings.has_alpaca_keys:
     st.warning("No Alpaca keys found — showing **demo data** (random prices). "
                "Add your keys to `.env` to use live market data.", icon="🧪")
+if leverage > 4:
+    st.caption("💀 Over 4x is more than a US stock broker allows intraday. Prop CFD accounts can go "
+               "higher, and here it's all fake money anyway.")
 
 
 def market_open() -> bool:
@@ -73,57 +117,87 @@ def market_open() -> bool:
         return local_market_is_open()
 
 
+def money(x: float) -> str:
+    return f"-${-x:,.2f}" if x < 0 else f"${x:,.2f}"
+
+
+def challenge_panel(book, equity: float):
+    start = book.starting_cash
+    day_start = book.day_start_equity or start
+    days = (datetime.now(timezone.utc) - account.started_at).days
+    status = {PASSED: "🏆 PASSED", FAILED: f"💀 FAILED ({book.status_reason})"}.get(book.status, "⏳ In progress")
+    st.subheader(f"Prop challenge: {status}")
+    c1, c2, c3, c4 = st.columns(4)
+    gain = (equity / start - 1) * 100
+    c1.metric("Progress to target", f"{gain:+.2f}%", f"target +{target:g}%", delta_color="off")
+    c1.progress(min(max(gain / target, 0.0), 1.0))
+    today = min((equity / day_start - 1) * 100, 0)
+    c2.metric("Today's loss", f"{today:.2f}%", f"limit -{daily_loss:g}%", delta_color="off")
+    c2.progress(min(-today / daily_loss, 1.0))
+    total = min(gain, 0)
+    c3.metric("Total loss", f"{total:.2f}%", f"limit -{max_dd:g}%", delta_color="off")
+    c3.progress(min(-total / max_dd, 1.0))
+    c4.metric("Day", f"{days + 1} / {window}")
+    c4.progress(min((days + 1) / window, 1.0))
+    if book.status != "ACTIVE":
+        st.info("The challenge is over. Reset the paper account in the sidebar to start a new one.")
+
+
 @st.fragment(run_every=interval if running else None)
 def live_panel():
     if not symbols:
         st.info("Pick at least one symbol in the sidebar.")
         return
     is_open = market_open()
-    result = run_tick(feed, account, symbols, short, long, is_open, trade=running)
+    result = run_tick(feed, account, symbols, short, long, is_open, risk, rules, intraday, trade=running)
 
     for err in result.errors:
         st.error(err)
     for t in result.trades:
-        st.toast(f"{t['side']} {t['qty']:g} {t['symbol']} @ ${t['price']:.2f}",
-                 icon="🟢" if t["side"] == "BUY" else "🔴")
+        st.toast(f"{t['side']} {t['qty']:g} {t['symbol']} @ ${t['price']:.2f} ({t['reason']})",
+                 icon="🟢" if t["side"] in ("BUY", "COVER") else "🔴")
 
-    prices = {s: float(df["close"].iloc[-1]) for s, df in result.bars.items()}
-    equity = account.equity(prices)
-    pnl = equity - account.starting_cash
+    book = result.book
+    equity = book.equity(result.prices)
+    exposure = book.gross_exposure(result.prices)
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Portfolio value", f"${equity:,.2f}", f"{pnl:+,.2f}")
-    c2.metric("Cash", f"${account.cash:,.2f}")
-    c3.metric("Open positions", len(account.positions()))
-    status = "🟢 Open" if is_open else "🔴 Closed"
-    c4.metric("Market", status, "bot running" if running else "bot paused",
+    c1.metric("Portfolio value", money(equity), f"{equity - book.starting_cash:+,.2f}")
+    c2.metric("Exposure", money(exposure), f"{exposure / equity:.1f}x of equity" if equity > 0 else None,
+              delta_color="off")
+    c3.metric("Open positions", len(book.positions))
+    c4.metric("Market", "🟢 Open" if is_open else "🔴 Closed", "bot running" if running else "bot paused",
               delta_color="normal" if running else "off")
     if running and not is_open:
         st.info("Market is closed — the bot is watching but won't trade until 9:30 ET.", icon="😴")
 
-    # Signals table
+    if challenge_on:
+        challenge_panel(book, equity)
+
     rows = []
-    positions = account.positions()
     for sym, df in result.bars.items():
         last = df.iloc[-1]
-        pos = positions.get(sym)
+        pos = book.positions.get(sym)
         rows.append({
             "Symbol": sym,
             "Price": last["close"],
             f"SMA{short}": last["sma_short"],
             f"SMA{long}": last["sma_long"],
-            "Trend": "⬆️ short > long" if last["sma_short"] > last["sma_long"] else "⬇️ short < long",
+            "Trend": "⬆️ up" if last["sma_short"] > last["sma_long"] else "⬇️ down",
             "Signal": result.signals.get(sym, "HOLD"),
-            "Holding": pos["qty"] if pos else 0,
-            "Unrealized P&L": (last["close"] - pos["avg_price"]) * pos["qty"] if pos else 0.0,
+            "Position": ("🟢 LONG " if pos.qty > 0 else "🔴 SHORT ") + f"{abs(pos.qty):g}" if pos else "—",
+            "Entry": pos.entry if pos else None,
+            "Stop": pos.stop if pos else None,
+            "Target": pos.target if pos else None,
+            "Unrealized P&L": (last["close"] - pos.entry) * pos.qty if pos else 0.0,
         })
     if rows:
         st.subheader("Watchlist")
         st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch",
                      column_config={c: st.column_config.NumberColumn(format="$%.2f")
-                                    for c in ["Price", f"SMA{short}", f"SMA{long}", "Unrealized P&L"]})
+                                    for c in ["Price", f"SMA{short}", f"SMA{long}", "Entry", "Stop",
+                                              "Target", "Unrealized P&L"]})
 
-    # Chart
     if result.bars:
         st.subheader("Chart")
         sym = st.selectbox("Symbol", list(result.bars), key="chart_symbol")
@@ -133,11 +207,12 @@ def live_panel():
         fig.add_scatter(x=df.index, y=df["sma_short"], name=f"SMA{short}", line=dict(width=1.5))
         fig.add_scatter(x=df.index, y=df["sma_long"], name=f"SMA{long}", line=dict(width=1.5))
         trades = [t for t in account.trades() if t["symbol"] == sym]
-        for side, color, marker in [("BUY", "#16a34a", "triangle-up"), ("SELL", "#dc2626", "triangle-down")]:
-            pts = [t for t in trades if t["side"] == side]
+        for sides, color, marker, name in [(("BUY", "COVER"), "#16a34a", "triangle-up", "Buy / cover"),
+                                           (("SELL", "SHORT"), "#dc2626", "triangle-down", "Sell / short")]:
+            pts = [t for t in trades if t["side"] in sides]
             if pts:
-                fig.add_scatter(x=pd.to_datetime([t["ts"] for t in pts]), y=[t["price"] for t in pts],
-                                mode="markers", name=side,
+                fig.add_scatter(x=pd.to_datetime([t["ts"] for t in pts], utc=True),
+                                y=[t["price"] for t in pts], mode="markers", name=name,
                                 marker=dict(symbol=marker, size=13, color=color))
         fig.update_layout(height=450, margin=dict(l=10, r=10, t=10, b=10),
                           legend=dict(orientation="h", y=1.02, x=0), hovermode="x unified")
@@ -154,14 +229,11 @@ def live_panel():
         st.caption("No trades yet. Turn the bot on and wait for a crossover.")
 
 
-PRESETS = {"20 / 50": (20, 50), "50 / 200": (50, 200)}
-BENCHMARK = "QQQ"
-
-
 @st.cache_data(ttl=3600, show_spinner="Downloading price history...")
-def load_history(symbols: tuple[str, ...], fetch_start: datetime, live: bool) -> dict[str, pd.DataFrame]:
+def load_history(symbols: tuple[str, ...], fetch_start: datetime, timeframe: str,
+                 live: bool) -> dict[str, pd.DataFrame]:
     # `live` is only part of the cache key, so demo and real data never mix.
-    return feed.get_history(list(symbols), fetch_start, "1Day")
+    return feed.get_history(list(symbols), fetch_start, timeframe)
 
 
 def pct(x: float) -> str:
@@ -169,10 +241,12 @@ def pct(x: float) -> str:
 
 
 def backtest_panel():
-    st.caption("Replays the exact same rules on **daily** bars: long only, one position per symbol, "
-               "cash split evenly, fills at the close plus slippage. Benchmark: buy and hold QQQ.")
+    st.caption(f"Replays the exact rules from the sidebar ({mode}, {timeframe} bars) on past prices. "
+               "Stops and targets are checked on bar closes, so real fills can be worse.")
     c1, c2 = st.columns([2, 1])
-    years = c1.slider("Years of history", 1, 8, 5)
+    max_months = 96 if not intraday else 24
+    months = c1.slider("Months of history", 1, max_months, 60 if not intraday else 6,
+                       key=f"bt_months_{intraday}")
     cash = c2.number_input("Starting cash ($)", 1000.0, 10_000_000.0, settings.starting_cash, 1000.0,
                            key="bt_cash")
     if not symbols:
@@ -183,12 +257,14 @@ def backtest_panel():
     if not st.session_state.get("bt_ran"):
         return
 
-    start = (datetime.now(timezone.utc) - timedelta(days=int(years * 365.25))).replace(
+    start = (datetime.now(timezone.utc) - timedelta(days=int(months * 30.44))).replace(
         hour=0, minute=0, second=0, microsecond=0)
-    longest = max([long] + [lw for _, lw in PRESETS.values()])
-    fetch_start = start - timedelta(days=int(longest * 1.6) + 10)  # SMA warm-up
+    bars_per_day = 1 if not intraday else max(390 // {"1Min": 1, "5Min": 5, "15Min": 15, "30Min": 30,
+                                                      "1Hour": 60}[timeframe], 1)
+    warmup_days = int(long / bars_per_day * 1.6) + 10
+    fetch_start = start - timedelta(days=warmup_days)
     try:
-        bars = load_history(tuple(sorted(set(symbols) | {BENCHMARK})), fetch_start,
+        bars = load_history(tuple(sorted(set(symbols) | {BENCHMARK})), fetch_start, timeframe,
                             settings.has_alpaca_keys)
     except Exception as exc:
         st.error(f"Data fetch failed: {exc}")
@@ -200,65 +276,89 @@ def backtest_panel():
     if not traded:
         return
 
-    # Run the selected settings plus the presets so they can be compared.
-    combos = {f"{short} / {long} (selected)": (short, long)}
-    for name, (sw, lw) in PRESETS.items():
-        if (sw, lw) != (short, long):
-            combos[name] = (sw, lw)
-    results = {name: run_backtest(traded, sw, lw, start, cash, settings.slippage_pct)
-               for name, (sw, lw) in combos.items()}
-    main = results[next(iter(combos))]
+    with st.spinner("Simulating..."):
+        main = run_backtest(traded, short, long, start, cash, risk, intraday)
+        challenges = run_challenges(traded, short, long, start, cash, risk, rules, intraday,
+                                    window_days=int(window), every_n_days=1 if months <= 12 else 5)
 
     bench = buy_and_hold(bars[BENCHMARK]["close"], start, cash) if BENCHMARK in bars else pd.Series()
     bench_ret = (bench.iloc[-1] / cash - 1) * 100 if not bench.empty else 0.0
-
     m = main.metrics
+
+    # ---- Prop challenge simulator ----
+    st.subheader(f"🏆 Prop challenge simulator: +{target:g}% in {window} days, "
+                 f"max -{daily_loss:g}%/day, -{max_dd:g}% total")
+    if challenges.empty:
+        st.info(f"Not enough history for a {window}-day challenge. Pick more months.")
+    else:
+        n = len(challenges)
+        counts = challenges["result"].value_counts()
+        passed = challenges[challenges["result"] == "PASSED"]
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Pass rate", f"{counts.get('PASSED', 0) / n * 100:.0f}%", f"{n} challenges simulated",
+                  delta_color="off")
+        k2.metric("Blown accounts", f"{counts.get('FAILED', 0) / n * 100:.0f}%")
+        k3.metric("Ran out of time", f"{counts.get('TIMEOUT', 0) / n * 100:.0f}%")
+        k4.metric("Avg days to pass", f"{passed['days'].mean():.0f}" if not passed.empty else "—")
+        rate = counts.get("PASSED", 0) / n
+        if rate >= 0.5:
+            st.success("Passes more often than not on this data. Now check it on months it wasn't tuned on.",
+                       icon="🏆")
+        elif rate > 0:
+            st.warning(f"Passes about 1 in {round(1 / rate)} tries. Budget for the challenge fees.", icon="⚠️")
+        else:
+            st.error("Never passed on this data. Tweak the settings or pick another strategy.", icon="💀")
+
+        colors = {"PASSED": "#16a34a", "FAILED": "#dc2626", "TIMEOUT": "#9ca3af"}
+        fig = go.Figure()
+        for res, color in colors.items():
+            part = challenges[challenges["result"] == res]
+            if not part.empty:
+                fig.add_bar(x=part["start"], y=part["return_pct"], name=res, marker_color=color)
+        fig.add_hline(y=target, line_dash="dot", line_color="#16a34a")
+        fig.add_hline(y=-max_dd, line_dash="dot", line_color="#dc2626")
+        fig.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10), yaxis_ticksuffix="%",
+                          legend=dict(orientation="h", y=1.05, x=0), xaxis_title="Challenge start date",
+                          yaxis_title="Result")
+        st.plotly_chart(fig, width="stretch")
+        with st.expander("Why challenges ended"):
+            st.dataframe(challenges.groupby(["result", "reason"]).size().rename("count").reset_index(),
+                         hide_index=True, width="stretch")
+
+    # ---- Full-period backtest ----
+    st.subheader("📈 Whole period (no challenge rules)")
     k1, k2, k3, k4, k5 = st.columns(5)
-    k1.metric("Strategy return", pct(m["total_return_pct"]), f"{m['total_return_pct'] - bench_ret:+.1f} pts vs QQQ")
-    k2.metric("Buy & hold QQQ", pct(bench_ret))
-    k3.metric("Yearly (CAGR)", pct(m["cagr_pct"]))
+    k1.metric("Strategy return", pct(m["total_return_pct"]),
+              f"{m['total_return_pct'] - bench_ret:+.1f} pts vs QQQ")
+    k2.metric("Avg month", pct(m["monthly_pct"]))
+    k3.metric("Buy & hold QQQ", pct(bench_ret))
     k4.metric("Worst drop", f"{m['max_drawdown_pct']:.1f}%",
               f"QQQ {max_drawdown(bench):.1f}%" if not bench.empty else None, delta_color="off")
-    k5.metric("Win rate", f"{m['win_rate_pct']:.0f}%", f"{m['closed_trades']} closed trades", delta_color="off")
-
-    if m["total_return_pct"] > bench_ret:
-        st.success(f"The strategy beat buy-and-hold QQQ by {m['total_return_pct'] - bench_ret:.1f} points. "
-                   "Check the worst drop too before getting hyped.", icon="🏆")
-    else:
-        st.warning(f"Buy-and-hold QQQ beat the strategy by {bench_ret - m['total_return_pct']:.1f} points.",
-                   icon="💀")
+    k5.metric("Win rate", f"{m['win_rate_pct']:.0f}%", f"{m['closed_trades']} closed trades",
+              delta_color="off")
 
     fig = go.Figure()
-    for name, res in results.items():
-        fig.add_scatter(x=res.equity.index, y=res.equity, name=f"SMA {name}", line=dict(width=2))
+    fig.add_scatter(x=main.equity.index, y=main.equity, name=f"{mode} SMA{short}/{long}", line=dict(width=2))
     if not bench.empty:
         fig.add_scatter(x=bench.index, y=bench, name="Buy & hold QQQ",
                         line=dict(width=2, dash="dot", color="#6b7280"))
-    fig.update_layout(height=420, margin=dict(l=10, r=10, t=10, b=10), yaxis_tickprefix="$",
+    fig.update_layout(height=380, margin=dict(l=10, r=10, t=10, b=10), yaxis_tickprefix="$",
                       legend=dict(orientation="h", y=1.02, x=0), hovermode="x unified")
     st.plotly_chart(fig, width="stretch")
 
-    st.subheader("Settings compared")
-    table = [{"Settings": name, "Return": r.metrics["total_return_pct"], "CAGR": r.metrics["cagr_pct"],
-              "Worst drop": r.metrics["max_drawdown_pct"], "Win rate": r.metrics["win_rate_pct"],
-              "Trades": r.metrics["trades"], "Final value": r.metrics["final_value"]}
-             for name, r in results.items()]
-    if not bench.empty:
-        table.append({"Settings": "Buy & hold QQQ", "Return": bench_ret,
-                      "CAGR": ((bench.iloc[-1] / cash) ** (365.25 / max((bench.index[-1] - bench.index[0]).days, 1)) - 1) * 100,
-                      "Worst drop": max_drawdown(bench), "Win rate": None, "Trades": 1,
-                      "Final value": float(bench.iloc[-1])})
-    pct_col = st.column_config.NumberColumn(format="%.1f%%")
-    st.dataframe(pd.DataFrame(table), hide_index=True, width="stretch",
-                 column_config={"Return": pct_col, "CAGR": pct_col, "Worst drop": pct_col,
-                                "Win rate": st.column_config.NumberColumn(format="%.0f%%"),
-                                "Final value": st.column_config.NumberColumn(format="$%.2f")})
+    if not main.equity.empty:
+        monthly = main.equity.resample("ME").last()
+        monthly = monthly.pct_change().fillna(monthly.iloc[0] / cash - 1) * 100
+        fig = go.Figure(go.Bar(x=monthly.index, y=monthly,
+                               marker_color=["#16a34a" if v >= 0 else "#dc2626" for v in monthly]))
+        fig.update_layout(height=260, margin=dict(l=10, r=10, t=30, b=10), yaxis_ticksuffix="%",
+                          title=f"Monthly returns · {int((monthly > 0).sum())} green / "
+                                f"{int((monthly <= 0).sum())} red months")
+        st.plotly_chart(fig, width="stretch")
 
-    st.subheader("Per-symbol P&L (selected settings)")
     closed = main.trades.dropna(subset=["pnl"])
-    if closed.empty:
-        st.caption("No closed trades.")
-    else:
+    if not closed.empty:
+        st.subheader("Per-symbol P&L")
         per = closed.groupby("symbol")["pnl"].agg(["sum", "count", lambda p: (p > 0).mean() * 100])
         per.columns = ["Realized P&L", "Trades", "Win rate"]
         st.dataframe(per.sort_values("Realized P&L", ascending=False), width="stretch",

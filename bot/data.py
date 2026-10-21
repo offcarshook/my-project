@@ -31,12 +31,17 @@ class AlpacaData:
         # Ask for enough calendar days to cover `limit` bars of regular trading.
         trading_days = limit * _TF_MINUTES.get(tf, 15) / 390
         start = datetime.now(timezone.utc) - timedelta(days=int(trading_days * 1.6) + 5)
+        return {s: df.tail(limit) for s, df in self.get_history(symbols, start, tf).items()}
+
+    def get_history(self, symbols: list[str], start: datetime,
+                    timeframe: str = "1Day") -> dict[str, pd.DataFrame]:
+        """Return every close price per symbol from `start` until now."""
         params = {
             "symbols": ",".join(symbols),
-            "timeframe": tf,
+            "timeframe": timeframe,
             "start": start.isoformat(),
             "feed": self.settings.data_feed,
-            "adjustment": "split",
+            "adjustment": "all",
             "limit": 10000,
         }
         rows: dict[str, list] = {s: [] for s in symbols}
@@ -58,7 +63,7 @@ class AlpacaData:
                 continue
             df = pd.DataFrame(bars)
             df["t"] = pd.to_datetime(df["t"])
-            out[sym] = df.set_index("t")[["c"]].rename(columns={"c": "close"}).tail(limit)
+            out[sym] = df.set_index("t")[["c"]].rename(columns={"c": "close"})
         return out
 
     def market_is_open(self) -> bool:
@@ -87,6 +92,19 @@ class DemoData:
             rng = np.random.default_rng(zlib.crc32(sym.encode()))
             steps = rng.normal(0, 0.004, bucket % 100_000 + limit)[-limit:]
             prices = self.BASE.get(sym, 100) * np.exp(np.cumsum(steps))
+            out[sym] = pd.DataFrame({"close": prices}, index=index)
+        return out
+
+    def get_history(self, symbols: list[str], start: datetime,
+                    timeframe: str = "1Day") -> dict[str, pd.DataFrame]:
+        """Daily random walk with a slight upward drift, from `start` until today."""
+        index = pd.bdate_range(start=pd.Timestamp(start).tz_convert("UTC").normalize(),
+                               end=pd.Timestamp.now(tz="UTC").normalize())
+        out = {}
+        for sym in symbols:
+            rng = np.random.default_rng(zlib.crc32(sym.encode()) + 1)
+            steps = rng.normal(0.0004, 0.016, len(index))
+            prices = self.BASE.get(sym, 100) * np.exp(np.cumsum(steps) - steps.sum())
             out[sym] = pd.DataFrame({"close": prices}, index=index)
         return out
 

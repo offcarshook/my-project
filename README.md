@@ -86,6 +86,26 @@ exact sidebar settings (mode, bar size, leverage, stops…) on past prices and s
 
 Intraday backtests go back up to 24 months, daily ones up to 8 years.
 
+## Real-data check (no keys needed)
+
+```bash
+pip install arch
+python scripts/real_data_sim.py
+```
+
+Runs the backtest and challenge simulator on real daily NASDAQ Composite and S&P 500 candles
+(1999–2018) bundled with the `arch` package. Results at 0.05% cost per side:
+
+| | NASDAQ | S&P 500 |
+| --- | --- | --- |
+| Buy & hold | +65.6% (worst drop -58.8%) | +77.6% (worst drop -55.7%) |
+| SMA 20/50, longs only | +73.3% (-41.1%) | +30.6% (-29.5%) |
+| SMA 50/200, longs only | **+184.4% (-22.6%)** | **+175.0% (-20.1%)** |
+
+On daily candles every 30-day prop challenge ran out of time (0% pass, ~0% fail): daily
+crossovers trade far too rarely to make +8% in a month. Passing needs an intraday strategy,
+which needs Alpaca 5-minute data.
+
 ## Layout
 
 | File | What it does |
@@ -97,6 +117,7 @@ Intraday backtests go back up to 24 months, daily ones up to 8 years.
 | `bot/paper.py` | Saves the live book to SQLite between ticks |
 | `bot/engine.py` | One bot tick: fetch → signal → trade |
 | `bot/backtest.py` | Historical replay, challenge simulator, buy-and-hold benchmark |
+| `scripts/real_data_sim.py` | Simulation on real daily index history |
 | `tests/` | `python -m pytest` |
 
 > This is an educational toy, not financial advice. SMA crossovers lag the price and get

@@ -125,7 +125,7 @@ of reshuffled trading days with its assumptions spelled out.
 * Logs every signal, order, fill, rejection, exit and risk decision to
   `logs/events-YYYYMMDD.jsonl`; writes live P&L, daily and overall drawdown, distance to each
   limit, exposure and trade counts to `state/status.json` (`python propbot.py status`, or the
-  dashboard's 📡 tab).
+  dashboard).
 * **Emergency stop**: `python propbot.py stop` cancels all orders and closes all positions
   immediately and writes `state/KILL`, which a running bot obeys on its next poll. Trading stays
   locked until `reset --yes`. Ctrl+C shuts down cleanly and (by default) flattens.
@@ -135,7 +135,7 @@ $25,000 and `verify` warns about it.
 
 ## Status of results
 
-* **Unit tests: 116 passing** (`python -m pytest`), covering signals and no-look-ahead, filters,
+* **Unit tests: 84 passing** (`python -m pytest`), covering signals and no-look-ahead, filters,
   position sizing, correlation and exposure limits, every drawdown method, daily resets, locks,
   fills/gaps/ties in the simulator, costs, order duplication across restarts, session shutdown,
   the kill switch and reconciliation (against a fake broker).
@@ -156,23 +156,22 @@ $25,000 and `verify` warns about it.
 | `propbot.py` | CLI: backtest, verify, paper, stop, status, reset |
 | `config.yaml` | every setting, documented inline |
 | `bot/config.py` | config loading and validation (fails safely) |
-| `bot/data.py` | Alpaca candles, regular-hours filter, monthly disk cache |
+| `bot/data.py` | Alpaca candles, regular-hours filter, monthly disk cache, synthetic candles for `--synthetic` |
 | `bot/indicators.py` | EMA, ATR, efficiency ratio, closed higher-timeframe candles |
-| `bot/strategy.py` | `EmaCross` (Prop Pass) plus the dashboard's older strategies |
+| `bot/strategy.py` | `EmaCross` strategy and stop distance |
 | `bot/costs.py` | spread, slippage and fee model |
 | `bot/risk.py` | challenge risk manager and position sizing |
 | `bot/sim.py` | intraday portfolio simulator |
 | `bot/pipeline.py`, `bot/report.py` | config comparison, test run, metrics, report |
 | `bot/montecarlo.py` | reshuffled-day challenge simulation |
 | `bot/broker.py`, `bot/trader.py`, `bot/http.py` | paper broker client, trading loop, retries |
+| `app.py` | read-only dashboard (status + latest report) |
 | `tests/` | `python -m pytest` |
 
-### Dashboard playground
+### Dashboard
 
-`streamlit run app.py` is the earlier interactive playground (several strategies, a quick
-local paper simulator and backtest, plus a 📡 tab that shows the paper bot's live status). Its
-quick backtest fills at candle closes with a flat cost; **`python propbot.py backtest` is the
-authoritative one.** `scripts/real_data_sim.py` runs older daily-candle experiments on index
-data bundled with the `arch` package.
+`streamlit run app.py` shows the running paper bot's live status (equity, daily and overall
+drawdown, exposure, positions, recent events) and the latest backtest report. It only reads
+files; trading happens in `python propbot.py paper`.
 
 > Educational project, not financial advice.

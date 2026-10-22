@@ -2,10 +2,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from bot.book import ChallengeRules
 from bot.montecarlo import daily_trade_returns, simulate_luck
 
-RULES = ChallengeRules(profit_target_pct=8, max_daily_loss_pct=5, max_drawdown_pct=10)
+
+
+class RULES:
+    profit_target_pct, max_daily_loss_pct, max_drawdown_pct = 8, 5, 10
 
 
 def test_steady_winner_always_passes_on_day_8():

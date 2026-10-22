@@ -1,50 +1,18 @@
-# Trading Bot — Project Prompt
+# Prop Pass: project brief
 
-## Original idea
-Compare an asset's recent average price with its longer average price.
-When the shorter average crosses above the longer one, the bot can buy. When it crosses back below, it can sell.
+Build a simple, efficient, moderately aggressive intraday bot to practice passing simulated
+prop firm challenges, paper trading only.
 
-Build a basic trading bot with a dashboard, fed with live data, using paper trades only.
+- Challenge: +8% target, 5% max daily drawdown, 10% max overall drawdown (configurable)
+- About 4-15 completed trades per day across QQQ, SPY, IWM, DIA, XLK, SMH, TQQQ, SQQQ, SOXL, VOO
+- Strategy: 9/21 EMA crossover on completed 5-minute candles, longs and shorts, with light
+  optional filters (higher-timeframe trend, ATR band, liquidity/spread, chop)
+- Risk: 0.25% per trade (0.10-0.50% range), ATR stops, 1.5-2R targets, 2-4 positions,
+  correlation and exposure limits, max 20 trades a day, flat before the close
+- A risk manager independent of the strategy that enforces the firm's drawdown rules
+- Realistic backtest with costs, train/validation/untouched test, challenge simulation and
+  Monte Carlo
+- Alpaca paper trading with logging, reconciliation, duplicate-order protection and an
+  emergency stop
 
-## Markets
-- **ETFs:** QQQ (Nasdaq-100), SPY (S&P 500), VOO
-- **Nasdaq stocks:** AAPL, MSFT, NVDA, AMZN, TSLA (watchlist editable from the dashboard)
-- Stock/ETF data from the Alpaca Market Data API (free tier)
-- Crypto dropped from v1
-
-## Strategy
-- SMA crossover: **20-period short / 50-period long** (configurable; 50/200 "golden cross" preset)
-- Buy when short SMA crosses above long SMA, sell when it crosses back below
-- Long only, one position per symbol, no leverage
-- Trades only during US market hours (9:30–16:00 ET)
-
-## Paper trading
-- $10,000 virtual starting balance
-- Simulated fills at the latest price with a small fee/slippage
-- Track positions, cash, P&L, and full trade history; persist to SQLite
-
-## Dashboard
-- Python + **Streamlit**
-- Price chart per symbol with both SMAs and buy/sell markers
-- Portfolio value, open positions, P&L, trade log
-- Symbol picker, SMA settings, start/stop bot, reset paper account
-
-## Config
-- API keys (`ALPACA_API_KEY`, `ALPACA_SECRET_KEY`) via `.env`, never committed
-
-## v2: aggressive mode for prop firm challenges
-- Goal: pass a prop challenge (+8% in 30 days, max -5% per day, -10% total), paper only
-- Modes: Safe / Aggressive / Degen with leverage, risk-per-trade sizing, stop loss,
-  take profit, shorting, max positions and flatten-before-close
-- Backtest runs a challenge simulator over rolling 30-day windows and reports the pass rate
-
-## v3: lower risk, higher frequency
-- Max 1% risk per trade, 5% daily loss limit, 10% max drawdown
-- Trade more often instead of bigger: new ⚡ Scalper mode on 1-minute bars (default)
-- Degen mode removed; Aggressive lowered to 1% risk
-
-## v4: VWAP pullback strategy
-- 0.5% risk per trade, 5-10 trades per day, selective but not too picky
-- Trend (VWAP + EMA 9/21) -> pullback to the 9 EMA -> breakout candle, with a volume filter
-  and 9:45-15:30 time window; ATR-based stops, 2R targets, max 10 trades per day
-- Backtest checks stops on candle highs/lows and reports trades per day and break-even win rate
+See README.md for how it was built and how to run it.

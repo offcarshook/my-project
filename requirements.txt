@@ -7,5 +7,3 @@ pytest>=8.0
 # dashboard only
 streamlit>=1.37
 plotly>=5.20
-# optional: scripts/real_data_sim.py
-# arch>=7.0

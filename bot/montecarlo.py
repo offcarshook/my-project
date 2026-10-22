@@ -5,7 +5,6 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from bot.book import ChallengeRules
 from bot.data import NY
 
 
@@ -33,9 +32,11 @@ def daily_trade_returns(trades: pd.DataFrame, equity: pd.Series, starting_cash: 
     return [np.array(by_day[d]) for d in days]
 
 
-def simulate_luck(day_returns: list[np.ndarray], rules: ChallengeRules, n_days: int = 21,
+def simulate_luck(day_returns: list[np.ndarray], rules, n_days: int = 21,
                   n_sims: int = 5000, seed: int = 0) -> LuckResult:
-    """Build `n_sims` random challenges of `n_days` trading days, each day drawn (with
+    """`rules` needs profit_target_pct, max_daily_loss_pct and max_drawdown_pct.
+
+    Build `n_sims` random challenges of `n_days` trading days, each day drawn (with
     replacement) from the real ones, and apply the target / daily / total loss rules
     after every closed trade."""
     rng = np.random.default_rng(seed)

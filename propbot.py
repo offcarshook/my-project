@@ -36,7 +36,7 @@ def cmd_backtest(cfg, args):
     end = pd.Timestamp(cfg.backtest.test[1])
     if args.synthetic:
         print("⚠️  SYNTHETIC random-walk data: this only checks that the pipeline runs. The numbers mean nothing.")
-        bars = DemoData(Settings()).get_history(cfg.watchlist, start.tz_localize("America/New_York"), cfg.strategy.timeframe)
+        bars = DemoData().get_history(cfg.watchlist, start.tz_localize("America/New_York"), cfg.strategy.timeframe)
     else:
         settings = Settings()
         if not settings.has_alpaca_keys:

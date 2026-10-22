@@ -1,20 +1,17 @@
-"""Market data: Alpaca REST API, or a synthetic demo feed when no keys are set."""
-from datetime import datetime, time, timedelta, timezone
+"""Market data: Alpaca REST candles with a monthly disk cache, plus synthetic candles for pipeline checks."""
+from datetime import datetime
 import zlib
 from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
-import requests
 
 from bot.config import Settings
 from bot.http import request_json
 
 DATA_URL = "https://data.alpaca.markets/v2/stocks/bars"
-CLOCK_URL = "https://paper-api.alpaca.markets/v2/clock"
 NY = ZoneInfo("America/New_York")
 
-# Rough minutes per bar, used to size the history request.
 TF_MINUTES = {"1Min": 1, "5Min": 5, "15Min": 15, "30Min": 30, "1Hour": 60, "1Day": 390}
 COLUMNS = {"o": "open", "h": "high", "l": "low", "c": "close", "v": "volume"}
 
@@ -26,14 +23,6 @@ class AlpacaData:
             "APCA-API-KEY-ID": settings.alpaca_key,
             "APCA-API-SECRET-KEY": settings.alpaca_secret,
         }
-
-    def get_bars(self, symbols: list[str], limit: int) -> dict[str, pd.DataFrame]:
-        """Return the latest `limit` close prices per symbol, indexed by timestamp."""
-        tf = self.settings.timeframe
-        # Ask for enough calendar days to cover `limit` bars of regular trading.
-        trading_days = limit * TF_MINUTES.get(tf, 15) / 390
-        start = datetime.now(timezone.utc) - timedelta(days=int(trading_days * 1.6) + 5)
-        return {s: df.tail(limit) for s, df in self.get_history(symbols, start, tf).items()}
 
     def get_history(self, symbols: list[str], start: datetime, timeframe: str = "1Day",
                     end: datetime | None = None, feed: str | None = None) -> dict[str, pd.DataFrame]:
@@ -69,34 +58,13 @@ class AlpacaData:
             out[sym] = regular_hours(df) if timeframe != "1Day" else df
         return out
 
-    def market_is_open(self) -> bool:
-        resp = requests.get(CLOCK_URL, headers=self.headers, timeout=10)
-        resp.raise_for_status()
-        return bool(resp.json()["is_open"])
-
 
 class DemoData:
-    """Random-walk prices so the dashboard works before you have API keys."""
+    """Random-walk candles for `propbot.py backtest --synthetic` pipeline checks. Never evidence of performance."""
 
     BASE = {"QQQ": 480, "SPY": 560, "VOO": 515, "AAPL": 225, "MSFT": 430,
             "NVDA": 130, "AMZN": 190, "TSLA": 250, "TQQQ": 75, "SQQQ": 9, "SOXL": 30,
             "IWM": 220, "DIA": 420, "XLK": 230, "SMH": 250}
-
-    def __init__(self, settings: Settings):
-        self.settings = settings
-
-    def get_bars(self, symbols: list[str], limit: int) -> dict[str, pd.DataFrame]:
-        minutes = TF_MINUTES.get(self.settings.timeframe, 15)
-        now = pd.Timestamp.now(tz="UTC").floor(f"{minutes}min")
-        index = pd.date_range(end=now, periods=limit, freq=f"{minutes}min")
-        bucket = int(now.timestamp() // (minutes * 60))
-        out = {}
-        for sym in symbols:
-            # Seeded per symbol so history is stable; a new bar appears each period.
-            rng = np.random.default_rng(zlib.crc32(sym.encode()))
-            steps = rng.normal(0, 0.004, bucket % 100_000 + limit)[-limit:]
-            out[sym] = _fake_candles(self.BASE.get(sym, 100), steps, index, rng)
-        return out
 
     def get_history(self, symbols: list[str], start: datetime,
                     timeframe: str = "1Day") -> dict[str, pd.DataFrame]:
@@ -120,8 +88,6 @@ class DemoData:
             out[sym] = _fake_candles(base, steps, index, rng)
         return out
 
-    def market_is_open(self) -> bool:
-        return True
 
 
 def _fake_candles(base: float, steps: np.ndarray, index: pd.DatetimeIndex, rng) -> pd.DataFrame:
@@ -144,12 +110,6 @@ def regular_hours(df: pd.DataFrame) -> pd.DataFrame:
     local = df.index.tz_convert(NY)
     mins = local.hour * 60 + local.minute
     return df[(mins >= 570) & (mins < 960)]
-
-
-def local_market_is_open(now: datetime | None = None) -> bool:
-    """Weekday 9:30-16:00 New York time. Ignores exchange holidays."""
-    now = (now or datetime.now(timezone.utc)).astimezone(NY)
-    return now.weekday() < 5 and time(9, 30) <= now.time() < time(16, 0)
 
 
 def load_bars(data, symbols: list[str], start, end, timeframe: str = "5Min", feed: str = "sip",
@@ -193,7 +153,3 @@ def load_bars(data, symbols: list[str], start, end, timeframe: str = "5Min", fee
         else:
             out[sym] = pd.DataFrame(columns=list(COLUMNS.values()))
     return out
-
-
-def make_feed(settings: Settings):
-    return AlpacaData(settings) if settings.has_alpaca_keys else DemoData(settings)

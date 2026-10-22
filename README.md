@@ -23,17 +23,20 @@ sell (or short) when it crosses back below.
 
 ## Modes
 
-| | 🎯 VWAP Pullback | ⚡ SMA Scalper | 🐢 Safe |
-| --- | --- | --- | --- |
-| Bars | 5Min | 1Min | 15Min |
-| Risk per trade | 0.5% | 0.5% | split evenly |
-| Stop | from the strategy (0.5–2 ATR) | 0.4% | none |
-| Target | 2x risk | 2x risk | none |
-| Max trades per day | 10 | 10 | no limit |
-| Max open positions | 3 | 2 | no limit |
-| Shorting | yes | yes | no |
-| Flat by 4pm | yes | yes | no |
-| Prop challenge rules | on | on | off |
+🔥 **ETF Scalper** runs the VWAP pullback on 1-minute candles across 10 liquid ETFs (QQQ, SPY, IWM, DIA, XLK, SMH, TQQQ, SQQQ, SOXL, VOO) and takes roughly 15–50 trades a day.
+
+
+| | 🔥 ETF Scalper (default) | 🎯 VWAP Pullback | ⚡ SMA Scalper | 🐢 Safe |
+| --- | --- | --- | --- | --- |
+| Bars | 1Min (EMA 5/13, no volume filter) | 5Min | 1Min | 15Min |
+| Risk per trade | 0.25% | 0.5% | 0.5% | split evenly |
+| Stop | from the strategy | from the strategy (0.5–2 ATR) | 0.4% | none |
+| Target | 1.5x risk | 2x risk | 2x risk | none |
+| Max trades per day | 50 | 10 | 10 | no limit |
+| Max open positions | 5 | 3 | 2 | no limit |
+| Shorting | yes | yes | yes | no |
+| Flat by 4pm | yes | yes | yes | no |
+| Prop challenge rules | on | on | on | off |
 
 Every setting can be changed in the sidebar; risk per trade is capped at **1%**. Position
 size is `risk ÷ stop distance`, capped by the leverage limit (4x by default). The **min volume**

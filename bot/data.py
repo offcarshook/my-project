@@ -78,7 +78,8 @@ class DemoData:
     """Random-walk prices so the dashboard works before you have API keys."""
 
     BASE = {"QQQ": 480, "SPY": 560, "VOO": 515, "AAPL": 225, "MSFT": 430,
-            "NVDA": 130, "AMZN": 190, "TSLA": 250, "TQQQ": 75, "SQQQ": 9, "SOXL": 30}
+            "NVDA": 130, "AMZN": 190, "TSLA": 250, "TQQQ": 75, "SQQQ": 9, "SOXL": 30,
+            "IWM": 220, "DIA": 420, "XLK": 230, "SMH": 250}
 
     def __init__(self, settings: Settings):
         self.settings = settings

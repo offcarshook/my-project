@@ -19,7 +19,12 @@ from bot.strategy import SmaCross, VwapPullback
 st.set_page_config(page_title="Prop Trading Bot", page_icon="📈", layout="wide")
 
 VWAP, SMA = VwapPullback.name, SmaCross.name
+ETF_SCALP_LIST = ["QQQ", "SPY", "IWM", "DIA", "XLK", "SMH", "TQQQ", "SQQQ", "SOXL", "VOO"]
 MODES = {
+    "🔥 ETF Scalper": dict(strategy=VWAP, timeframe="1Min", fast=5, slow=13, rvol=0.0, leverage=4.0,
+                          risk_pct=0.25, stop_pct=0.0, take_profit_pct=0.0, reward_risk=1.5, max_trades=50,
+                          allow_short=True, max_positions=5, flatten_eod=True, challenge=True, interval=10,
+                          watchlist=ETF_SCALP_LIST),
     "🎯 VWAP Pullback": dict(strategy=VWAP, timeframe="5Min", leverage=4.0, risk_pct=0.5, stop_pct=0.0,
                             take_profit_pct=0.0, reward_risk=2.0, max_trades=10, allow_short=True,
                             max_positions=3, flatten_eod=True, challenge=True, interval=30),
@@ -49,9 +54,11 @@ st.sidebar.title("⚙️ Bot settings")
 mode = st.sidebar.radio("Mode", list(MODES), horizontal=True)
 d = MODES[mode]
 
+default_list = d.get("watchlist", settings.watchlist)
 symbols = st.sidebar.multiselect(
-    "Watchlist (ETFs + Nasdaq)", options=sorted(set(settings.watchlist + list(DemoData.BASE))),
-    default=settings.watchlist,
+    "Watchlist (ETFs + Nasdaq)",
+    options=sorted(set(settings.watchlist + list(DemoData.BASE) + ETF_SCALP_LIST)),
+    default=default_list, key=f"watch_{mode}",
 )
 extra = st.sidebar.text_input("Add symbols (comma separated)")
 symbols += [s.strip().upper() for s in extra.split(",") if s.strip() and s.strip().upper() not in symbols]
@@ -62,9 +69,9 @@ with st.sidebar.expander("📊 Strategy", expanded=True):
                              key=f"tf_{mode}")
     if d["strategy"] == VWAP:
         c1, c2 = st.columns(2)
-        fast = c1.number_input("Fast EMA", 2, 100, 9, key=f"fast_{mode}")
-        slow = c2.number_input("Slow EMA", 3, 300, 21, key=f"slow_{mode}")
-        rvol = st.slider("Min volume vs average", 0.0, 3.0, 1.2, 0.1, key=f"rvol_{mode}",
+        fast = c1.number_input("Fast EMA", 2, 100, d.get("fast", 9), key=f"fast_{mode}")
+        slow = c2.number_input("Slow EMA", 3, 300, d.get("slow", 21), key=f"slow_{mode}")
+        rvol = st.slider("Min volume vs average", 0.0, 3.0, d.get("rvol", 1.2), 0.1, key=f"rvol_{mode}",
                          help="Higher = pickier, fewer trades. 1.2 = bar volume at least 20% above normal")
         if fast >= slow:
             st.error("Fast EMA must be smaller than slow EMA.")

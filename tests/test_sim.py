@@ -252,3 +252,13 @@ def test_strategy_stop_with_no_target_uses_reward_risk():
     bars = day([FLAT, FLAT, (100, 101.2, 99.9, 101)])
     t = Simulator(cfg(), {"A": bars}, Levels({0: 1}, 0.5)).run().trades.iloc[0]
     assert t.stop == pytest.approx(99.5) and t.reason == "take profit" and t.exit == pytest.approx(101)   # 2R
+
+
+def test_signal_without_a_cross_still_enters():
+    class NoCross(Levels):
+        def compute(self, df):
+            df = super().compute(df)
+            df["cross"] = 0
+            return df
+    bars = day([FLAT, FLAT, (100, 101.2, 99.9, 101)])
+    assert len(Simulator(cfg(), {"A": bars}, NoCross({0: 1}, 0.5)).run().trades) == 1

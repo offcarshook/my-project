@@ -108,8 +108,8 @@ class Simulator:
             cutoff = np.minimum(cutoff, close - 10)
         self.flatten = minutes >= cutoff
         # Bars where something happens: a raw cross (possible exit) or a filtered signal (entry).
-        self.events = {int(i): [int(k) for k in np.nonzero(self.cross[i])[0]]
-                       for i in np.nonzero(self.cross.any(axis=1))[0]}
+        active = (self.cross != 0) | (self.signal != 0)
+        self.events = {int(i): [int(k) for k in np.nonzero(active[i])[0]] for i in np.nonzero(active.any(axis=1))[0]}
         self.session_starts = [i for i in range(n) if i == 0 or self.days[i] != self.days[i - 1]]
 
     # ------------------------------------------------------------------

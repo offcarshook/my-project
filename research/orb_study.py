@@ -313,7 +313,7 @@ def stage_variants(cfg, bars, sessions, out):
     print(entry.round(3).to_string())
 
 
-def entry_event_study(cfg, bars):
+def entry_event_study(cfg, bars, extra_stop_slippage_bps=(0,)):
     """A3: breakout entry on the candle CLOSE (next open, what the bot does) vs a resting STOP
     order at the range level (fills intraday, at the open if it gaps through). Same engine for
     both: first trade per symbol per day, range-opposite stop, exit at the flatten time, stop
@@ -339,12 +339,13 @@ def entry_event_study(cfg, bars):
             if not len(flat):
                 continue
             end = flat[0]
-            for mode in ("close", "stop"):
-                trade = _first_trade(rest, end, hi, lo, mode, p["last_entry"])
+            for mode in ["close"] + [f"stop +{x}bp" if x else "stop" for x in extra_stop_slippage_bps]:
+                trade = _first_trade(rest, end, hi, lo, mode.split()[0], p["last_entry"])
                 if trade is None:
                     continue
                 entry_i, side, ref = trade
-                fill = costs.market_fill(sym, side, ref)
+                extra = float(mode.split("+")[1][:-2]) if "+" in mode else 0.0
+                fill = costs.market_fill(sym, side, ref) + side * ref * extra / 10_000
                 stop = lo if side > 0 else hi
                 dist = (fill - stop) * side
                 if dist <= 0:
@@ -401,18 +402,217 @@ def _first_trade(rest, end, hi, lo, mode, last_entry):
     return None
 
 
+# ---------------------------------------------------------------------------
+# robustness of the shortlisted variants
+# ---------------------------------------------------------------------------
+def candidates(cfg):
+    vs = variant_set(cfg)
+    combo = copy.deepcopy(vs["A2 breakout close +0.25 ATR"])
+    combo.strategy.orb["last_entry"] = "10:30"
+    return {"baseline": vs["baseline (ORB 15m, range stop, hold)"],
+            "A1 +0.10 ATR": vs["A1 breakout close +0.10 ATR"], "A2 +0.25 ATR": vs["A2 breakout close +0.25 ATR"],
+            "F1 last entry 10:30": vs["F1 last entry 10:30"], "A2 + F1": combo,
+            "D1 retest (fewer trades)": vs["D1 retest entry (6 candles)"]}
+
+
+NUDGES = {   # +-25% on the one parameter each candidate changed (+-15 min for times)
+    "baseline": [("orb", "min_range_pct", 0.11), ("orb", "min_range_pct", 0.19)],
+    "A1 +0.10 ATR": [("orb", "buffer_atr", 0.075), ("orb", "buffer_atr", 0.125)],
+    "A2 +0.25 ATR": [("orb", "buffer_atr", 0.19), ("orb", "buffer_atr", 0.31)],
+    "F1 last entry 10:30": [("orb", "last_entry", "10:15"), ("orb", "last_entry", "10:45")],
+    "A2 + F1": [("orb", "buffer_atr", 0.19), ("orb", "buffer_atr", 0.31), ("orb", "last_entry", "10:15"),
+                ("orb", "last_entry", "10:45")],
+    "D1 retest (fewer trades)": [("orb", "retest_bars", 4), ("orb", "retest_bars", 8)],
+}
+
+
+def with_costs(v, mult):
+    v = copy.deepcopy(v)
+    v.costs.slippage_bps *= mult
+    v.costs.default_spread_bps *= mult
+    for inst in v.instruments.values():
+        if inst.spread_bps is not None:
+            inst.spread_bps *= mult
+    return v
+
+
+class RandomSide:
+    """Same entry candles as the wrapped strategy, coin-flip direction, same stop distance:
+    what the breakout's direction is worth."""
+
+    def __init__(self, inner, seed):
+        self.inner, self.seed, self.warmup = inner, seed, inner.warmup
+
+    def compute(self, df):
+        out = self.inner.compute(df)
+        rng = np.random.default_rng(self.seed + int(df["close"].iloc[0] * 100) % 1000)
+        on = out["signal"].isin(["BUY", "SELL"]).to_numpy()
+        flip = rng.random(len(out)) < 0.5
+        side = np.where(out["signal"] == "BUY", 1, -1) * np.where(flip, -1, 1)
+        out["signal"] = np.where(on, np.where(side > 0, "BUY", "SELL"), "HOLD")
+        out["cross"] = 0
+        return out
+
+
+def short_metrics(v, bars, sessions, sim=None):
+    sim = sim or simulator(v, bars, sessions)
+    cash = v.backtest.starting_cash
+    m = {p: metrics(sim.run(*period(rng)), cash) for p, rng in (("train", TRAIN), ("val", VAL))}
+    return {"train_r": m["train"]["expectancy_r"], "val_r": m["val"]["expectancy_r"],
+            "train_t": m["train"]["r_tstat"], "val_t": m["val"]["r_tstat"],
+            "trades_day": (m["train"]["trades_per_session"] + m["val"]["trades_per_session"]) / 2}
+
+
+def stage_robustness(cfg, bars, sessions, out):
+    rows = []
+    for name, v in candidates(cfg).items():
+        rows.append({"candidate": name, "test": "as is", **short_metrics(v, bars, sessions)})
+        for mult in (1.5, 2.0):
+            rows.append({"candidate": name, "test": f"costs x{mult:g}", **short_metrics(with_costs(v, mult), bars, sessions)})
+        for section, key, value in NUDGES[name]:
+            n = copy.deepcopy(v)
+            getattr(n.strategy, section)[key] = value
+            rows.append({"candidate": name, "test": f"{key}={value}", **short_metrics(n, bars, sessions)})
+        for sym in bars:
+            rows.append({"candidate": name, "test": f"without {sym}",
+                         **short_metrics(v, {s: b for s, b in bars.items() if s != sym}, sessions)})
+        print(pd.DataFrame([r for r in rows if r["candidate"] == name]).round(3).to_string(index=False), flush=True)
+    base = candidates(cfg)["baseline"]
+    bm = TF_MINUTES[base.strategy.timeframe]
+    for seed in range(10):
+        strat = RandomSide(build_strategy(base.strategy, base.risk.stop, bm, base.backtest.data_feed), seed)
+        sim = Simulator(base, bars, strat, bm, sessions)
+        rows.append({"candidate": "random direction", "test": f"seed {seed}", **short_metrics(base, bars, sessions, sim)})
+    rnd = pd.DataFrame([r for r in rows if r["candidate"] == "random direction"])
+    print(rnd.round(3).to_string(index=False))
+    print(f"random direction: train {rnd.train_r.mean():+.3f}R (max {rnd.train_r.max():+.3f}), "
+          f"val {rnd.val_r.mean():+.3f}R (max {rnd.val_r.max():+.3f})")
+    pd.DataFrame(rows).to_csv(out / "robustness.csv", index=False)
+    stress = entry_event_study(cfg, bars, extra_stop_slippage_bps=(0, 1, 2, 3))
+    stress.to_csv(out / "entry_event_study_stress.csv")
+    print(stress.round(3).to_string())
+
+
+# ---------------------------------------------------------------------------
+# prop challenge mode: pass rates with uncertainty, against luck, identical rules
+# ---------------------------------------------------------------------------
+CHALLENGE = {"profit_target_pct": 6.0, "max_daily_loss_pct": 5.0, "max_total_loss_pct": 10.0,
+             "drawdown_type": "static", "daily_loss_base": "initial", "window_days": 30,
+             "min_trading_days": 3, "consistency_pct": 0.0}
+RISK_GRID = (0.25, 0.375, 0.5, 0.75)
+
+
+def challenge_cfg(v, risk):
+    v = copy.deepcopy(v)
+    for k, x in CHALLENGE.items():
+        setattr(v.challenge, k, x)
+    v.risk.risk_per_trade_pct = risk
+    v.risk.max_gross_exposure = max(v.risk.max_gross_exposure, v.backtest.sweep_max_gross_exposure)
+    v.backtest.challenge_every_n_days = 1          # a fresh challenge every session
+    return v
+
+
+def wilson(p, n, z=1.96):
+    if n <= 0:
+        return np.nan, np.nan
+    centre = (p + z * z / (2 * n)) / (1 + z * z / n)
+    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / (1 + z * z / n)
+    return max(centre - half, 0) * 100, min(centre + half, 1) * 100
+
+
+def challenge_rows(name, v, bars, sessions, periods, risks=RISK_GRID):
+    from bot.pipeline import luck_baseline
+    rows = []
+    for risk in risks:
+        c = challenge_cfg(v, risk)
+        sim = simulator(c, bars, sessions)
+        for pname, rng in periods:
+            a, b = period(rng)
+            w = challenge_windows(sim, a, b - pd.Timedelta(days=1), c)
+            ch = report.challenge_summary(w)
+            n = len(w)
+            n_eff = len(set(ny_index(sim.index[(sim.index >= a) & (sim.index < b)]).date)) / 21   # non-overlapping windows
+            lo_ci, hi_ci = wilson(ch.get("pass_pct", 0) / 100, n_eff)
+            res = sim.run(a, b)
+            mc = zero = np.nan
+            if len(res.trades) >= 20:
+                real, z = luck_baseline(res.trades, res.equity["equity"], c.backtest.starting_cash, c)
+                mc, zero = real.pass_rate * 100, z.pass_rate * 100
+            rows.append({"candidate": name, "risk_pct": risk, "period": pname, "windows": n, "independent_windows": n_eff,
+                         "pass_pct": ch.get("pass_pct", 0), "pass_ci95": f"{lo_ci:.0f}-{hi_ci:.0f}",
+                         "fail_pct": ch.get("fail_pct", 0), "timeout_pct": ch.get("timeout_pct", 0),
+                         "median_days_to_pass": ch.get("median_days_to_pass", np.nan),
+                         "mc_pass_pct": mc, "zero_edge_pass_pct": zero, "edge_margin_pct": mc - zero})
+            print({k: (round(x, 2) if isinstance(x, float) else x) for k, x in rows[-1].items()}, flush=True)
+    return rows
+
+
+def stage_challenge(cfg, bars, sessions, out, names=("baseline", "A2 + F1")):
+    cands = candidates(cfg)
+    rows = []
+    for name in names:
+        rows += challenge_rows(name, cands[name], bars, sessions, (("train", TRAIN), ("validation", VAL)))
+    df = pd.DataFrame(rows)
+    df.to_csv(out / "challenge.csv", index=False)
+    print(df.round(2).to_string(index=False))
+
+
+def stage_final(cfg, bars, sessions, out, frozen_path):
+    """The frozen config (and the baseline, same rules) on the SEEN period, once."""
+    frozen = json.loads(Path(frozen_path).read_text())
+    cands = candidates(cfg)
+    lines = [f"# Frozen ORB on {SEEN[0]} -> {SEEN[1]} (seen before: not an untouched test)\n",
+             f"Frozen: `{frozen['candidate']}` at {frozen['risk_pct']}% risk, frozen in commit {frozen.get('commit', '?')}.\n"]
+    rows, tables = {}, []
+    for name, risk in ((frozen["candidate"], frozen["risk_pct"]), ("baseline", frozen["risk_pct"])):
+        v = challenge_cfg(cands[name], risk)
+        sim = simulator(v, bars, sessions)
+        res = sim.run(*period(SEEN))
+        m = metrics(res, v.backtest.starting_cash)
+        rows[f"{name} @ {risk}%"] = m
+        inst = report.per_instrument(res.trades, m["sessions"], v.backtest.starting_cash)
+        months = report.monthly(res.trades, res.equity)
+        tables += [f"## {name}: per ETF\n", report.fmt_table(inst.round(3)),
+                   f"## {name}: by month\n", report.fmt_table(months.round(2))]
+        side = res.trades.groupby("side")["r"].agg(["size", "mean"])
+        tables += [f"## {name}: by side (R)\n", report.fmt_table(side.round(3))]
+        regime_sym = cfg.backtest.regime_symbol
+        if regime_sym in bars:
+            daily = bars[regime_sym]["close"].groupby(ny_index(bars[regime_sym].index).date).last()
+            tables += [f"## {name}: by market regime (labels from past data only)\n",
+                       report.fmt_table(report.by_regime(res.trades, report.regimes(daily)).round(3))]
+        res.trades.to_csv(out / f"final_trades_{name.replace(' ', '_')}.csv", index=False)
+    ch = pd.DataFrame(challenge_rows(frozen["candidate"], cands[frozen["candidate"]], bars, sessions, (("seen", SEEN),),
+                                     risks=(frozen["risk_pct"],))
+                      + challenge_rows("baseline", cands["baseline"], bars, sessions, (("seen", SEEN),),
+                                       risks=(frozen["risk_pct"],)))
+    lines += ["## Strategy metrics\n", report.fmt_table(table(rows).T.round(3)),
+              "## Prop challenges (fresh start every session)\n", report.fmt_table(ch.round(2).set_index("candidate"))]
+    lines += tables
+    (out / "final.md").write_text("\n".join(lines))
+    ch.to_csv(out / "final_challenge.csv", index=False)
+    print("\n".join(lines))
+
+
 def main(argv=None):
     p = argparse.ArgumentParser()
     p.add_argument("--config", required=True)
     p.add_argument("--data", required=True)
     p.add_argument("--out", required=True)
-    p.add_argument("stage", choices=["baseline", "diagnose", "variants"])
+    p.add_argument("stage", choices=["baseline", "diagnose", "variants", "robustness", "challenge", "final"])
+    p.add_argument("--frozen", default=str(Path(__file__).with_name("frozen_orb.json")))
+    p.add_argument("--names", default="baseline,A2 + F1", help="challenge: candidates to compare")
     a = p.parse_args(argv)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     cfg, bars, sessions = load(a.config, a.data)
-    {"baseline": stage_baseline, "diagnose": stage_diagnose, "variants": stage_variants}[a.stage](
-        cfg, bars, sessions, out)
+    if a.stage == "final":
+        stage_final(cfg, bars, sessions, out, a.frozen)
+    elif a.stage == "challenge":
+        stage_challenge(cfg, bars, sessions, out, tuple(a.names.split(",")))
+    else:
+        {"baseline": stage_baseline, "diagnose": stage_diagnose, "variants": stage_variants,
+         "robustness": stage_robustness}[a.stage](cfg, bars, sessions, out)
 
 
 if __name__ == "__main__":

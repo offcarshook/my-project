@@ -469,8 +469,52 @@ def backtest_panel():
                                     "pnl": st.column_config.NumberColumn(format="$%.2f")})
 
 
-live_tab, backtest_tab = st.tabs(["🤖 Live bot", "🧪 Backtest"])
+def paper_bot_panel():
+    """Read-only view of the Prop Pass paper bot (`python propbot.py paper`)."""
+    import json
+    from pathlib import Path
+
+    from bot.config import ConfigError, load_config
+
+    try:
+        pcfg = load_config("config.yaml")
+    except ConfigError as exc:
+        st.error(f"config.yaml problem: {exc}")
+        return
+    st.caption("Live status of `python propbot.py paper` (Alpaca paper account). Refreshes every 15 seconds.")
+    path = Path(pcfg.paper.state_dir) / "status.json"
+    if not path.exists():
+        st.info("The paper bot hasn't written a status yet. Start it with `python propbot.py paper`.")
+        return
+    s = json.loads(path.read_text())
+    if s.get("locked"):
+        st.error(f"🔒 Locked: {s.get('reason')}. Run `python propbot.py reset --yes` to start a new challenge.")
+    elif s.get("challenge_status") == "PASSED":
+        st.success("🏆 Profit target reached. Trading stopped.")
+    c1, c2, c3, c4 = st.columns(4)
+    if "equity" in s:
+        c1.metric("Equity", money(s["equity"]), f"{s['pnl_total']:+,.2f} total")
+        c2.metric("Today", f"{s['pnl_today']:+,.2f}",
+                  f"{s['daily_loss_used_pct']:.2f}% of {s['daily_limit_pct']:g}% daily limit used", delta_color="off")
+        c3.metric("Overall drawdown", f"{s['overall_drawdown_pct']:.2f}%",
+                  f"{money(s['distance_to_total_floor'])} to the floor", delta_color="off")
+        c4.metric("Open exposure", money(s["open_exposure"]), f"{len(s['positions'])} positions", delta_color="off")
+        st.progress(min(max(s["pnl_total"] / (s["target"] - s["initial"]), 0.0), 1.0),
+                    text=f"Progress to target {money(s['target'])}")
+    st.caption(f"{s['note']} · {s['trades_today']} trades today · updated {s['time']}")
+    if s["positions"]:
+        st.dataframe(pd.DataFrame(s["positions"]).T, width="stretch")
+    logs = sorted(Path(pcfg.paper.log_dir).glob("events-*.jsonl"))
+    if logs:
+        lines = logs[-1].read_text().splitlines()[-100:]
+        st.subheader("Recent events")
+        st.dataframe(pd.DataFrame([json.loads(x) for x in reversed(lines)]), hide_index=True, width="stretch")
+
+
+live_tab, backtest_tab, paper_tab = st.tabs(["🤖 Live bot", "🧪 Backtest", "📡 Paper bot (Alpaca)"])
 with live_tab:
     live_panel()
 with backtest_tab:
     backtest_panel()
+with paper_tab:
+    st.fragment(run_every=15)(paper_bot_panel)()

@@ -8,6 +8,7 @@ import pandas as pd
 import requests
 
 from bot.config import Settings
+from bot.http import request_json
 
 DATA_URL = "https://data.alpaca.markets/v2/stocks/bars"
 CLOCK_URL = "https://paper-api.alpaca.markets/v2/clock"
@@ -34,22 +35,22 @@ class AlpacaData:
         start = datetime.now(timezone.utc) - timedelta(days=int(trading_days * 1.6) + 5)
         return {s: df.tail(limit) for s, df in self.get_history(symbols, start, tf).items()}
 
-    def get_history(self, symbols: list[str], start: datetime,
-                    timeframe: str = "1Day") -> dict[str, pd.DataFrame]:
-        """Return every close price per symbol from `start` until now."""
+    def get_history(self, symbols: list[str], start: datetime, timeframe: str = "1Day",
+                    end: datetime | None = None, feed: str | None = None) -> dict[str, pd.DataFrame]:
+        """Return every candle per symbol from `start` until `end` (default: now)."""
         params = {
             "symbols": ",".join(symbols),
             "timeframe": timeframe,
-            "start": start.isoformat(),
-            "feed": self.settings.data_feed,
+            "start": pd.Timestamp(start).isoformat(),
+            "feed": feed or self.settings.data_feed,
             "adjustment": "all",
             "limit": 10000,
         }
+        if end is not None:
+            params["end"] = pd.Timestamp(end).isoformat()
         rows: dict[str, list] = {s: [] for s in symbols}
         while True:
-            resp = requests.get(DATA_URL, headers=self.headers, params=params, timeout=15)
-            resp.raise_for_status()
-            payload = resp.json()
+            payload = request_json("GET", DATA_URL, self.headers, params)
             for sym, bars in (payload.get("bars") or {}).items():
                 rows.setdefault(sym, []).extend(bars)
             token = payload.get("next_page_token")
@@ -149,6 +150,49 @@ def local_market_is_open(now: datetime | None = None) -> bool:
     """Weekday 9:30-16:00 New York time. Ignores exchange holidays."""
     now = (now or datetime.now(timezone.utc)).astimezone(NY)
     return now.weekday() < 5 and time(9, 30) <= now.time() < time(16, 0)
+
+
+def load_bars(data, symbols: list[str], start, end, timeframe: str = "5Min", feed: str = "sip",
+              cache_dir: str | None = "data/cache", log=print) -> dict[str, pd.DataFrame]:
+    """Regular-hours candles for [start, end], cached per symbol and calendar month on disk
+    so backtests are reproducible and repeat runs don't re-download. Only finished months
+    are cached; the current month is always fetched fresh."""
+    from pathlib import Path
+
+    def ny(x):
+        ts = pd.Timestamp(x)
+        return ts.tz_localize(NY) if ts.tzinfo is None else ts.tz_convert(NY)
+
+    def month_of(ts):
+        return ts.tz_localize(None).to_period("M")
+
+    start, end = ny(start), ny(end) + pd.Timedelta(days=1)
+    this_month = month_of(pd.Timestamp.now(tz=NY))
+    out = {}
+    for sym in symbols:
+        parts = []
+        for month in pd.period_range(month_of(start), month_of(end - pd.Timedelta(seconds=1)), freq="M"):
+            path = Path(cache_dir) / feed / timeframe / sym / f"{month}.csv.gz" if cache_dir else None
+            if path is not None and path.exists():
+                df = pd.read_csv(path, index_col=0, parse_dates=True)
+            else:
+                m_start = month.start_time.tz_localize(NY)
+                m_end = min(month.end_time.tz_localize(NY), pd.Timestamp.now(tz=NY))
+                log(f"  downloading {sym} {month} ({feed}, {timeframe})")
+                df = data.get_history([sym], m_start, timeframe, end=m_end, feed=feed).get(sym, pd.DataFrame())
+                if path is not None and month < this_month and not df.empty:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    df.to_csv(path, compression="gzip")
+            if not df.empty:
+                parts.append(df)
+        if parts:
+            df = pd.concat(parts)
+            df.index = pd.to_datetime(df.index, utc=True)
+            df = df[~df.index.duplicated()].sort_index()
+            out[sym] = df[(df.index >= start) & (df.index < end)]
+        else:
+            out[sym] = pd.DataFrame(columns=list(COLUMNS.values()))
+    return out
 
 
 def make_feed(settings: Settings):

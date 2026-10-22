@@ -2,6 +2,7 @@
   "candidate": "A2 + F1",
   "description": "ORB 15m, range stop, hold to close; breakout close must clear the range by 0.25 ATR; last entry 10:30",
   "risk_pct": 0.5,
+  "commit": "b269d0c",
   "frozen_on": "2026-10-22",
   "chosen_on": "train 2022-03-21..2024-03-31 and validation 2024-04-01..2025-03-31 only",
   "note": "no risk level beat the zero-edge luck baseline by 10+ points in train (max +7.2); 0.5% chosen for 0% blown challenges"

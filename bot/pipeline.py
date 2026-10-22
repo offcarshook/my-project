@@ -171,7 +171,7 @@ def _luck_rules(cfg: BotConfig):
 
 
 def run_pipeline(cfg: BotConfig, bars: dict[str, pd.DataFrame], out_dir: str = "reports",
-                 synthetic: bool = False, log=print, sessions: dict | None = None) -> Path:
+                 synthetic: bool = False, log=print, sessions: dict | None = None, data_label: str | None = None) -> Path:
     bar_minutes = TF_MINUTES[cfg.strategy.timeframe]
     cash = cfg.backtest.starting_cash
     feed = cfg.backtest.data_feed
@@ -259,14 +259,15 @@ def run_pipeline(cfg: BotConfig, bars: dict[str, pd.DataFrame], out_dir: str = "
                    "risk": asdict(v.risk)}, fh, indent=2)
 
     md = _markdown(cfg, bars, comparison, chosen, selection_note, m_te, ch_te, inst, months, regime_table, mc,
-                   windows, synthetic, sweep=sweep, risk_note=risk_note, chosen_cfg=v, mc_zero=mc_zero)
+                   windows, synthetic, sweep=sweep, risk_note=risk_note, chosen_cfg=v, mc_zero=mc_zero,
+                   data_label=data_label)
     (out / "report.md").write_text(md)
     log(f"report written to {out / 'report.md'}")
     return out
 
 
 def _markdown(cfg, bars, comparison, chosen, note, m_te, ch_te, inst, months, regime_table, mc, windows, synthetic,
-              sweep=None, risk_note="", chosen_cfg=None, mc_zero=None):
+              sweep=None, risk_note="", chosen_cfg=None, mc_zero=None, data_label=None):
     chosen_cfg = chosen_cfg or cfg
     L = []
     if synthetic:
@@ -278,7 +279,7 @@ def _markdown(cfg, bars, comparison, chosen, note, m_te, ch_te, inst, months, re
               ""]
     L += ["# Prop Pass backtest report", "",
           f"Generated {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC} · data: "
-          f"{'synthetic random walk' if synthetic else 'Alpaca ' + cfg.backtest.data_feed.upper() + ' ' + cfg.strategy.timeframe + ' candles'} · "
+          f"{'synthetic random walk' if synthetic else (data_label or 'Alpaca ' + cfg.backtest.data_feed.upper() + ' ' + cfg.strategy.timeframe + ' candles')} · "
           f"{len(bars)} symbols: {', '.join(bars)}", "",
           f"Starting cash ${cfg.backtest.starting_cash:,.0f} · risk {cfg.risk.risk_per_trade_pct}% per trade · "
           f"challenge +{cfg.challenge.profit_target_pct}% / -{cfg.challenge.max_daily_loss_pct}% daily / "

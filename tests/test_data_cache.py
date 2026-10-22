@@ -58,3 +58,28 @@ def test_sessions_trim_early_close_and_drop_non_sessions():
     kept = regular_hours(df, {"2025-11-28": ("09:30", "13:00")})
     assert kept.index.max().tz_convert("America/New_York").strftime("%H:%M") == "12:55"
     assert regular_hours(df, {}).empty
+
+
+def test_load_local_bars_parquet_and_csv(tmp_path):
+    from bot.data import load_local_bars, regular_hours, sessions_from_data
+    times = pd.date_range("2025-11-28 09:30", "2025-11-28 13:55", freq="5min")   # half day + after-hours prints
+    df = pd.DataFrame({"datetime": times, "Open": 1.0, "High": 1.1, "Low": 0.9, "Close": 1.0, "Volume": 100})
+    df.to_parquet(tmp_path / "ab12cd-QQQ_clean_5min.parquet")
+    df.rename(columns={"datetime": "timestamp"}).to_csv(tmp_path / "SPY.csv", index=False)
+    bars = load_local_bars(str(tmp_path), ["QQQ", "SPY", "IWM"])
+    assert set(bars) == {"QQQ", "SPY"}
+    first = bars["QQQ"].index[0].tz_convert("America/New_York")
+    assert first.strftime("%H:%M") == "09:30" and list(bars["QQQ"].columns) == ["open", "high", "low", "close", "volume"]
+    sessions = sessions_from_data(bars)
+    assert sessions["2025-11-28"] == ("09:30", "13:00")
+    trimmed = regular_hours(bars["QQQ"], sessions)
+    assert trimmed.index[-1].tz_convert("America/New_York").strftime("%H:%M") == "12:55"
+
+
+def test_load_local_bars_rejects_missing_columns(tmp_path):
+    import pytest
+    from bot.data import load_local_bars
+    pd.DataFrame({"datetime": pd.date_range("2025-01-02 09:30", periods=3, freq="5min"), "close": 1.0}) \
+        .to_csv(tmp_path / "QQQ.csv", index=False)
+    with pytest.raises(ValueError, match="missing column"):
+        load_local_bars(str(tmp_path))

@@ -131,6 +131,59 @@ def regular_hours(df: pd.DataFrame, sessions: dict | None = None) -> pd.DataFram
     return df[(mins >= opens) & (mins < closes)]
 
 
+# NYSE early closes (13:00 New York), used when the exchange calendar API can't be reached
+# (e.g. backtesting local files offline). Extend this list for other years.
+KNOWN_EARLY_CLOSES = {
+    "2022-11-25", "2023-07-03", "2023-11-24", "2024-07-03", "2024-11-29", "2024-12-24",
+    "2025-07-03", "2025-11-28", "2025-12-24",
+}
+
+
+def sessions_from_data(bars: dict[str, pd.DataFrame]) -> dict:
+    """Sessions for every date present in `bars`: 09:30-16:00, or 09:30-13:00 on known early closes."""
+    days = set()
+    for df in bars.values():
+        if not df.empty:
+            days.update(df.index.tz_convert(NY).strftime("%Y-%m-%d"))
+    return {d: ("09:30", "13:00" if d in KNOWN_EARLY_CLOSES else "16:00") for d in sorted(days)}
+
+
+def load_local_bars(path: str, symbols: list[str] | None = None) -> dict[str, pd.DataFrame]:
+    """Candles from local .parquet / .csv files (e.g. FirstRate Data or your own exports).
+
+    One file per symbol; the symbol is taken from the file name (e.g. `QQQ_clean_5min.parquet`,
+    `QQQ.csv`). Columns are matched case-insensitively: a timestamp column (datetime / timestamp /
+    time / date) plus open, high, low, close, volume. Timestamps without a time zone are taken as
+    New York time. Only regular-hours candles are kept."""
+    import re
+    from pathlib import Path
+
+    files = sorted([*Path(path).glob("*.parquet"), *Path(path).glob("*.csv"), *Path(path).glob("*.csv.gz")])
+    out = {}
+    for f in files:
+        match = re.search(r"(?:^|[-_ ])([A-Z]{1,6})(?=[_.\- ]|$)", f.name.split(".")[0] + ".")
+        if not match:
+            continue
+        sym = match.group(1)
+        if symbols is not None and sym not in symbols:
+            continue
+        df = pd.read_parquet(f) if f.suffix == ".parquet" else pd.read_csv(f)
+        cols = {c.lower(): c for c in df.columns}
+        ts_col = next((cols[c] for c in ("datetime", "timestamp", "time", "date", "t") if c in cols), None)
+        if ts_col is None:
+            raise ValueError(f"{f.name}: no timestamp column (expected datetime/timestamp/time/date)")
+        missing = [c for c in ("open", "high", "low", "close", "volume") if c not in cols]
+        if missing:
+            raise ValueError(f"{f.name}: missing column(s) {missing}")
+        idx = pd.DatetimeIndex(pd.to_datetime(df[ts_col]))
+        idx = idx.tz_localize(NY) if idx.tz is None else idx
+        frame = pd.DataFrame({c: df[cols[c]].to_numpy(dtype=float) for c in ("open", "high", "low", "close", "volume")},
+                             index=idx.tz_convert("UTC"))
+        frame = frame[~frame.index.duplicated()].sort_index()
+        out[sym] = regular_hours(frame)
+    return out
+
+
 def load_sessions(data, start, end, cache_dir: str | None = "data/cache") -> dict:
     """Exchange sessions {date: (open, close)} for [start, end] from Alpaca's calendar, cached
     in cache_dir/calendar.json."""

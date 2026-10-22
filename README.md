@@ -18,6 +18,10 @@ python propbot.py backtest    # one command: data -> config comparison -> test -
 python propbot.py paper       # one command: run the paper bot during market hours
 ```
 
+Got your own candle files (e.g. FirstRate Data)? `python propbot.py backtest --data path/to/folder`
+reads one `.parquet` or `.csv` per symbol (symbol in the file name; columns datetime/open/high/low/
+close/volume, naive times = New York). Keep licensed data out of git: `data/` is ignored.
+
 Other commands: `python propbot.py stop` (emergency stop), `status`, `reset --yes` (stop the bot first).
 `python propbot.py backtest --synthetic` runs the whole pipeline on random prices, only to
 check that everything works. **Synthetic results mean nothing about real markets.**
@@ -169,7 +173,7 @@ $25,000 and `verify` warns about it.
 
 ## Status of results
 
-* **Unit tests: 131 passing** (`python -m pytest`), covering signals and no-look-ahead, filters,
+* **Unit tests: 133 passing** (`python -m pytest`), covering signals and no-look-ahead, filters,
   position sizing, correlation and exposure limits, every drawdown method, daily resets, locks,
   fills/gaps/ties in the simulator, costs, the risk sweep's luck gate, order duplication across
   restarts, session shutdown, the kill switch and reconciliation (against fake brokers, one of

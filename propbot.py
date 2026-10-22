@@ -2,6 +2,7 @@
 
     python propbot.py backtest            # download/cached Alpaca data -> compare configs -> test -> report
     python propbot.py backtest --synthetic  # pipeline check on random data (NOT performance evidence)
+    python propbot.py backtest --data DIR # use local .parquet/.csv candle files (e.g. FirstRate Data)
     python propbot.py verify              # check credentials, account, symbols, data and spreads
     python propbot.py paper               # run the paper-trading bot (Ctrl+C stops it safely)
     python propbot.py stop                # EMERGENCY STOP: cancel orders, close positions, lock
@@ -28,14 +29,27 @@ def setup_logging(log_dir: str):
 
 
 def cmd_backtest(cfg, args):
-    from bot.data import AlpacaData, DemoData, load_bars, load_sessions
+    from bot.data import AlpacaData, DemoData, load_bars, load_local_bars, load_sessions, regular_hours, \
+        sessions_from_data
     from bot.http import ApiError
     from bot.pipeline import run_pipeline
 
     start = pd.Timestamp(cfg.backtest.train[0]) - pd.Timedelta(days=14)   # indicator warm-up
     end = pd.Timestamp(cfg.backtest.test[1])
     sessions = None
-    if args.synthetic:
+    if args.data:
+        bars = load_local_bars(args.data, cfg.watchlist)
+        missing = [s for s in cfg.watchlist if s not in bars]
+        if not bars:
+            sys.exit(f"No files for the watchlist symbols found in {args.data}")
+        if missing:
+            print(f"No local files for: {', '.join(missing)} (left out)")
+        sessions = sessions_from_data(bars)
+        bars = {s: regular_hours(df, sessions) for s, df in bars.items()}
+        span = [df.index for df in bars.values()]
+        print(f"Loaded {len(bars)} symbols from {args.data}: {min(i[0] for i in span):%Y-%m-%d} → "
+              f"{max(i[-1] for i in span):%Y-%m-%d}")
+    elif args.synthetic:
         print("⚠️  SYNTHETIC random-walk data: this only checks that the pipeline runs. The numbers mean nothing.")
         bars = DemoData().get_history(cfg.watchlist, start.tz_localize("America/New_York"), cfg.strategy.timeframe)
     else:
@@ -63,7 +77,8 @@ def cmd_backtest(cfg, args):
         if empty:
             print(f"No data for: {', '.join(empty)} (left out)")
             bars = {s: df for s, df in bars.items() if not df.empty}
-    out = run_pipeline(cfg, bars, out_dir=args.out, synthetic=args.synthetic, sessions=sessions)
+    label = f"local files in {args.data}" if args.data else None
+    out = run_pipeline(cfg, bars, out_dir=args.out, synthetic=args.synthetic, sessions=sessions, data_label=label)
     print(f"\nReport: {out / 'report.md'}")
 
 
@@ -167,6 +182,7 @@ def main(argv=None):
     sub = p.add_subparsers(dest="cmd", required=True)
     b = sub.add_parser("backtest", help="run the backtest pipeline and write a report")
     b.add_argument("--synthetic", action="store_true", help="random data, pipeline check only")
+    b.add_argument("--data", help="folder of local candle files (.parquet/.csv, one per symbol) instead of Alpaca")
     b.add_argument("--out", default="reports")
     sub.add_parser("verify", help="check account, symbols, data and spreads")
     sub.add_parser("paper", help="run the paper-trading bot")

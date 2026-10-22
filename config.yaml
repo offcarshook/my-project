@@ -32,6 +32,13 @@ instruments:
 # Strategy: EMA crossover on completed candles
 # ---------------------------------------------------------------------------
 strategy:
+  # ema_cross       EMA crossover (fast/slow below)
+  # orb             opening range breakout (strategy.orb)
+  # vwap_reversion  fade stretched moves back to VWAP (strategy.vwap)
+  # ict_fvg         liquidity sweep -> market structure shift -> fair value gap retest (strategy.ict)
+  # Strategies that place their own stop/target use them as price levels; risk.stop min/max_pct
+  # still bound the stop, and risk.reward_risk sets the target when the strategy doesn't.
+  type: ema_cross
   timeframe: 5Min          # candle size (completed candles only)
   fast: 9                  # fast EMA length
   slow: 21                 # slow EMA length
@@ -50,6 +57,29 @@ strategy:
     liquidity:   {enabled: true, min_dollar_volume_sip: 250000, min_dollar_volume_iex: 5000, max_spread_bps: 15}
     # 4. Chop: Kaufman efficiency ratio (0 = pure noise, 1 = straight line) over N candles.
     chop:        {enabled: false, period: 12, min_efficiency: 0.3}
+  orb:
+    minutes: 15            # opening range length
+    stop: range            # range = other side of the range | mid = its midpoint
+    last_entry: "11:30"    # no breakout entries after this (New York)
+    min_range_pct: 0.15    # skip ranges narrower than this % of price ...
+    max_range_pct: 2.5     # ... or wider than this
+    vwap_confirm: false    # longs only above VWAP, shorts only below
+    max_trades_per_side: 1 # per symbol per day
+  vwap:
+    dev_atr: 2.0           # how far from VWAP (in ATRs) counts as stretched
+    stop_buffer_atr: 0.5   # stop this many ATRs beyond the recent extreme
+    min_rr: 1.0            # skip when the distance to VWAP is under min_rr x the stop
+    first_entry: "10:00"
+    last_entry: "15:00"
+    max_efficiency: 1.0    # < 1 skips clean trends (efficiency ratio above this)
+    max_trades_per_side: 2
+  ict:
+    pivot: 2               # swing = fractal with this many candles on each side
+    mss_window: 12         # candles allowed between the sweep and the structure shift
+    entry_window: 6        # candles allowed for the fair value gap retest
+    min_fvg_atr: 0.1       # minimum gap size in ATRs
+    stop_buffer_atr: 0.1   # stop this many ATRs beyond the sweep extreme
+    max_trades_per_side: 1
 
 # ---------------------------------------------------------------------------
 # Risk per trade and portfolio limits
@@ -61,7 +91,7 @@ risk:
     type: atr                  # atr | fixed
     atr_mult: 1.5              # stop distance = atr_mult x ATR ...
     min_pct: 0.15              # ... but at least this % of price
-    max_pct: 1.5               # ... and at most this % of price
+    max_pct: 3.0               # ... and at most this % of price (also caps strategy-placed stops)
     fixed_pct: 0.3             # used when type: fixed
   reward_risk: 2.0             # take profit at this multiple of the stop distance (0 = none)
   trailing:

@@ -3,6 +3,7 @@
     python propbot.py backtest            # download/cached Alpaca data -> compare configs -> test -> report
     python propbot.py backtest --synthetic  # pipeline check on random data (NOT performance evidence)
     python propbot.py backtest --data DIR # use local .parquet/.csv candle files (e.g. FirstRate Data)
+    python propbot.py backtest --strategies orb,ict   # only compare these strategy families
     python propbot.py verify              # check credentials, account, symbols, data and spreads
     python propbot.py paper               # run the paper-trading bot (Ctrl+C stops it safely)
     python propbot.py stop                # EMERGENCY STOP: cancel orders, close positions, lock
@@ -32,8 +33,12 @@ def cmd_backtest(cfg, args):
     from bot.data import AlpacaData, DemoData, load_bars, load_local_bars, load_sessions, regular_hours, \
         sessions_from_data
     from bot.http import ApiError
-    from bot.pipeline import run_pipeline
+    from bot.pipeline import FAMILIES, run_pipeline
 
+    families = tuple(f.strip() for f in args.strategies.split(",") if f.strip()) if args.strategies else FAMILIES
+    unknown = set(families) - set(FAMILIES)
+    if unknown:
+        sys.exit(f"Unknown --strategies: {', '.join(sorted(unknown))} (choose from {', '.join(FAMILIES)})")
     start = pd.Timestamp(cfg.backtest.train[0]) - pd.Timedelta(days=14)   # indicator warm-up
     end = pd.Timestamp(cfg.backtest.test[1])
     sessions = None
@@ -78,7 +83,8 @@ def cmd_backtest(cfg, args):
             print(f"No data for: {', '.join(empty)} (left out)")
             bars = {s: df for s, df in bars.items() if not df.empty}
     label = f"local files in {args.data}" if args.data else None
-    out = run_pipeline(cfg, bars, out_dir=args.out, synthetic=args.synthetic, sessions=sessions, data_label=label)
+    out = run_pipeline(cfg, bars, out_dir=args.out, synthetic=args.synthetic, sessions=sessions, data_label=label,
+                       families=families)
     print(f"\nReport: {out / 'report.md'}")
 
 
@@ -177,13 +183,14 @@ def cmd_reset(cfg, args):
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(description="Prop Pass: EMA crossover prop-challenge bot (paper trading only)")
+    p = argparse.ArgumentParser(description="Prop Pass: intraday ETF prop-challenge bot (paper trading only)")
     p.add_argument("--config", default="config.yaml")
     sub = p.add_subparsers(dest="cmd", required=True)
     b = sub.add_parser("backtest", help="run the backtest pipeline and write a report")
     b.add_argument("--synthetic", action="store_true", help="random data, pipeline check only")
     b.add_argument("--data", help="folder of local candle files (.parquet/.csv, one per symbol) instead of Alpaca")
     b.add_argument("--out", default="reports")
+    b.add_argument("--strategies", help="strategy families to compare, comma-separated: ema,orb,vwap,ict (default: all)")
     sub.add_parser("verify", help="check account, symbols, data and spreads")
     sub.add_parser("paper", help="run the paper-trading bot")
     sub.add_parser("stop", help="emergency stop")

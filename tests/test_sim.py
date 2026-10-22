@@ -217,3 +217,38 @@ def test_trades_record_costs():
     c.costs.default_spread_bps, c.costs.slippage_bps = 2, 1
     t = Simulator(c, {"A": day([FLAT, FLAT, (100, 102.5, 99.95, 102)])}, Given({0: 1})).run().trades.iloc[0]
     assert t.costs > 0 and t.costs >= t.fees   # spread + slippage on both sides (fees are 0 in this fixture)
+
+
+class Levels(Given):
+    """Strategy stub that also sets its own stop/target distances (from the signal close)."""
+
+    def __init__(self, signals, stop_dist, target_dist=float("nan")):
+        super().__init__(signals)
+        self.sd, self.td = stop_dist, target_dist
+
+    def compute(self, df):
+        df = super().compute(df)
+        df["stop_dist"] = [self.sd if i in self.signals else float("nan") for i in range(len(df))]
+        df["target_dist"] = [self.td if i in self.signals else float("nan") for i in range(len(df))]
+        return df
+
+
+def test_strategy_stop_and_target_levels_are_used():
+    # signal close 100: stop level 99.5, target level 101; fill at 100.1 -> stop 0.6 below the fill
+    bars = day([FLAT, (100.1, 100.2, 100, 100.1), (100.1, 101.2, 100, 101)])
+    t = Simulator(cfg(), {"A": bars}, Levels({0: 1}, 0.5, 1.0)).run().trades.iloc[0]
+    assert t.entry == pytest.approx(100.1) and t.stop == pytest.approx(99.5)
+    assert t.reason == "take profit" and t.exit == pytest.approx(101)
+
+
+def test_no_entry_when_open_is_already_through_the_strategy_stop_or_target():
+    through_stop = day([FLAT, (99.4, 99.6, 99.3, 99.5), FLAT])
+    assert Simulator(cfg(), {"A": through_stop}, Levels({0: 1}, 0.5, 1.0)).run().trades.empty
+    past_target = day([FLAT, (101.2, 101.3, 101, 101.1), FLAT])
+    assert Simulator(cfg(), {"A": past_target}, Levels({0: 1}, 0.5, 1.0)).run().trades.empty
+
+
+def test_strategy_stop_with_no_target_uses_reward_risk():
+    bars = day([FLAT, FLAT, (100, 101.2, 99.9, 101)])
+    t = Simulator(cfg(), {"A": bars}, Levels({0: 1}, 0.5)).run().trades.iloc[0]
+    assert t.stop == pytest.approx(99.5) and t.reason == "take profit" and t.exit == pytest.approx(101)   # 2R

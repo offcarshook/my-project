@@ -15,16 +15,22 @@ from bot.data import TF_MINUTES
 from bot.indicators import ny_index
 from bot.montecarlo import daily_trade_returns, simulate_luck
 from bot.sim import Simulator
-from bot.strategy import EmaCross
+from bot.strategy import build_strategy
 
 FILTERS_ON = {"htf_trend": True, "atr_band": True, "liquidity": True}
 COMPLEXITY_PENALTY = 0.15   # t-stat points per enabled filter
 
 
-def variants(cfg: BotConfig) -> dict[str, BotConfig]:
+FAMILIES = ("ema", "orb", "vwap", "ict")
+
+
+def variants(cfg: BotConfig, families=FAMILIES) -> dict[str, BotConfig]:
     """The small, fixed set of configurations to compare. The first one is config.yaml exactly
-    as the paper bot will trade it; the others change one idea at a time. Liquidity stays at
-    its config.yaml setting everywhere, since the paper bot always applies it."""
+    as the paper bot will trade it; the others change one idea at a time, per strategy family.
+    Liquidity stays at its config.yaml setting everywhere, since the paper bot always applies it."""
+    unknown = set(families) - set(FAMILIES)
+    if unknown:
+        raise ValueError(f"unknown strategy families: {', '.join(sorted(unknown))} (use {', '.join(FAMILIES)})")
     liquidity_on = cfg.strategy.filters.liquidity["enabled"]
 
     def make(fast, slow, filtered=False, chop=False, atr_mult=None, min_pct=None, rr=None):
@@ -45,12 +51,42 @@ def variants(cfg: BotConfig) -> dict[str, BotConfig]:
             c.risk.reward_risk = rr
         return c
 
+    def family(kind, key, rr, **params):
+        """A non-EMA strategy with the EMA-only filters off and its own params on top of config.yaml's."""
+        c = make(cfg.strategy.fast, cfg.strategy.slow, rr=rr)
+        c.strategy.type = kind
+        setattr(c.strategy, key, {**getattr(c.strategy, key), **params})
+        return c
+
     rr = cfg.risk.reward_risk
+    out = {"config.yaml as-is": copy.deepcopy(cfg)}
+    if "orb" in families:
+        # rr 0 = no profit target: ride the breakout until the stop, an opposite breakout or the flatten time
+        out.update({
+            "ORB 15m, range stop, hold": family("orb", "orb", 0, minutes=15, stop="range"),
+            "ORB 15m, mid stop, 2R": family("orb", "orb", 2.0, minutes=15, stop="mid"),
+            "ORB 30m, range stop, hold": family("orb", "orb", 0, minutes=30, stop="range"),
+            "ORB 30m, range stop, 2R, VWAP side": family("orb", "orb", 2.0, minutes=30, stop="range", vwap_confirm=True),
+        })
+    if "vwap" in families:
+        out.update({
+            "VWAP fade 2.0 ATR": family("vwap_reversion", "vwap", rr, dev_atr=2.0),
+            "VWAP fade 2.5 ATR": family("vwap_reversion", "vwap", rr, dev_atr=2.5),
+            "VWAP fade 2.0 ATR, choppy only": family("vwap_reversion", "vwap", rr, dev_atr=2.0, max_efficiency=0.4),
+        })
+    if "ict" in families:
+        out.update({
+            "ICT sweep+MSS+FVG 2R": family("ict_fvg", "ict", 2.0),
+            "ICT sweep+MSS+FVG 3R": family("ict_fvg", "ict", 3.0),
+            "ICT sweep+MSS+FVG pivot 3, 2R": family("ict_fvg", "ict", 2.0, pivot=3, entry_window=12),
+        })
+    if "ema" not in families:
+        return out
     # "Wide" = 3x ATR stop with a 0.30% floor and a 1.5R target: fewer stop-outs from 5-minute
     # noise and a smaller cost per R. Position size shrinks with the wider stop, which the risk
     # sweep can make up for by raising risk per trade.
     return {
-        "config.yaml as-is": copy.deepcopy(cfg),
+        **out,
         "EMA 9/21": make(9, 21),
         "EMA 10/30": make(10, 30),
         "EMA 20/50": make(20, 50),
@@ -171,16 +207,17 @@ def _luck_rules(cfg: BotConfig):
 
 
 def run_pipeline(cfg: BotConfig, bars: dict[str, pd.DataFrame], out_dir: str = "reports",
-                 synthetic: bool = False, log=print, sessions: dict | None = None, data_label: str | None = None) -> Path:
+                 synthetic: bool = False, log=print, sessions: dict | None = None, data_label: str | None = None,
+                 families=FAMILIES) -> Path:
     bar_minutes = TF_MINUTES[cfg.strategy.timeframe]
     cash = cfg.backtest.starting_cash
     feed = cfg.backtest.data_feed
     tr, va, te = _period(cfg.backtest.train), _period(cfg.backtest.validation), _period(cfg.backtest.test)
 
     rows, sims, details = [], {}, {}
-    for name, v in variants(cfg).items():
+    for name, v in variants(cfg, families).items():
         log(f"[{name}] simulating train + validation")
-        sim = Simulator(v, bars, EmaCross(v.strategy, v.risk.stop, bar_minutes, feed), bar_minutes, sessions)
+        sim = Simulator(v, bars, build_strategy(v.strategy, v.risk.stop, bar_minutes, feed), bar_minutes, sessions)
         sims[name] = (v, sim)
         m_tr = report.summarize(sim.run(*tr), cash)
         res_va = sim.run(*va)

@@ -31,7 +31,7 @@ from bot.costs import CostModel
 from bot.data import TF_MINUTES
 from bot.http import ApiError
 from bot.risk import FLATTEN_LOCK, OK, PASSED, TARGET_HIT, OpenPosition, RiskManager, size_position
-from bot.strategy import BUY, SELL, EmaCross, stop_distance
+from bot.strategy import BUY, SELL, build_strategy, clamp_stop, stop_distance
 
 log = logging.getLogger("propbot")
 NY = "America/New_York"
@@ -78,7 +78,7 @@ class Trader:
         self.costs = CostModel(cfg.costs, cfg.spread_bps)
         self.bar_minutes = TF_MINUTES[cfg.strategy.timeframe]
         self.bar_len = pd.Timedelta(minutes=self.bar_minutes)
-        self.strategy = EmaCross(cfg.strategy, cfg.risk.stop, self.bar_minutes, cfg.paper.data_feed)
+        self.strategy = build_strategy(cfg.strategy, cfg.risk.stop, self.bar_minutes, cfg.paper.data_feed)
         self.stop_requested = False
         self._wake = threading.Event()
         self.shortable: set[str] = set()
@@ -461,7 +461,24 @@ class Trader:
                 self.event("entry_skipped", symbol=sym, reason=f"spread {spread:.1f} bps too wide")
                 return
             price = q["ask"] if direction > 0 else q["bid"]
-        stop_dist = float(stop_distance(price, float(last["atr"]), self.cfg.risk.stop))
+        # Same rule as the backtest: a strategy-placed stop/target is a price level anchored at the
+        # signal candle's close; otherwise the ATR stop and risk.reward_risk apply.
+        close = float(last["close"])
+        sd, td = last.get("stop_dist", float("nan")), last.get("target_dist", float("nan"))
+        target_level = None
+        if pd.notna(sd):
+            stop_dist = (price - (close - direction * float(sd))) * direction
+            if stop_dist <= 0:
+                self.event("entry_skipped", symbol=sym, reason="price already through the strategy's stop")
+                return
+            stop_dist = clamp_stop(price, stop_dist, self.cfg.risk.stop)
+        else:
+            stop_dist = float(stop_distance(price, float(last["atr"]), self.cfg.risk.stop))
+        if pd.notna(td):
+            target_level = close + direction * float(td)
+            if (target_level - price) * direction <= 0:
+                self.event("entry_skipped", symbol=sym, reason="price already at the strategy's target")
+                return
         inst = self.cfg.instrument(sym)
         sizing = size_position(sym, direction, price, stop_dist, equity, self._open_positions(prices), self.cfg.risk,
                                inst.group, inst.leverage, self.risk.risk_room(equity), self.state["trades_today"],
@@ -469,13 +486,17 @@ class Trader:
         if sizing.qty < 1:
             self.event("entry_skipped", symbol=sym, reason=sizing.reason)
             return
-        self._enter(sym, ts, direction, sizing.qty, price, stop_dist, sizing.details.get("reserve_per_share", 0.0))
+        self._enter(sym, ts, direction, sizing.qty, price, stop_dist, sizing.details.get("reserve_per_share", 0.0),
+                    target_level)
 
-    def _enter(self, sym, ts, direction, qty, price, stop_dist, reserve=0.0):
+    def _enter(self, sym, ts, direction, qty, price, stop_dist, reserve=0.0, target_level=None):
         rr = self.cfg.risk.reward_risk
         cid = f"pp-{sym}-{pd.Timestamp(ts).tz_convert(NY):%Y%m%d%H%M}-{'L' if direction > 0 else 'S'}"
         stop = round(price - direction * stop_dist, 2)
-        target = round(price + direction * stop_dist * rr, 2) if rr else None
+        if target_level is not None:
+            target = round(target_level, 2)
+        else:
+            target = round(price + direction * stop_dist * rr, 2) if rr else None
         # GTC legs: if the bot dies before flattening, the stop still protects the position at the
         # next open (it can't stop a gap through it, but it caps losses after that).
         order = {"symbol": sym, "qty": str(qty), "side": "buy" if direction > 0 else "sell", "type": "market",

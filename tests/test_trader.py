@@ -450,3 +450,29 @@ def test_status_uses_trailing_floor(tmp_path):
     t.step()
     st = json.loads((tmp_path / "state" / "status.json").read_text())
     assert st["total_limit_used_pct_of_limit"] == pytest.approx(50)
+
+
+class LevelStrategy:
+    """EmaCross signals, plus a strategy-set stop 2.00 and target 3.00 from the signal close."""
+
+    def __init__(self, inner):
+        self.inner, self.warmup = inner, inner.warmup
+
+    def compute(self, df):
+        df = self.inner.compute(df)
+        on = df["signal"].isin(["BUY", "SELL"])
+        df["stop_dist"] = np.where(on, 2.0, np.nan)
+        df["target_dist"] = np.where(on, 3.0, np.nan)
+        return df
+
+
+def test_strategy_stop_and_target_levels_go_on_the_bracket(tmp_path):
+    cfg = make_cfg(tmp_path)
+    when = first_buy_time(cfg)
+    t, broker = trader_at(tmp_path, when, cfg=cfg)
+    t.strategy = LevelStrategy(t.strategy)
+    close = float(BARS.loc[BARS.index <= when - pd.Timedelta(minutes=6), "close"].iloc[-1])
+    t.step()
+    o = broker.orders_list[0]
+    assert float(o["stop_loss"]["stop_price"]) == pytest.approx(round(close - 2.0, 2))
+    assert float(o["take_profit"]["limit_price"]) == pytest.approx(round(close + 3.0, 2))

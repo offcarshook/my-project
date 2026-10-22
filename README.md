@@ -1,12 +1,12 @@
 # 🏆 Prop Pass: a frequent-trading prop challenge bot (paper only)
 
-An intraday EMA-crossover bot for practicing simulated prop firm challenges on an **Alpaca
-paper account**. One strategy, a realistic backtester, a strategy-independent risk manager, and
-a paper-trading loop. It never sends live orders.
+An intraday ETF bot for practicing simulated prop firm challenges on an **Alpaca paper
+account**. Four switchable strategies (EMA crossover, opening range breakout, VWAP mean
+reversion, ICT liquidity sweep + structure shift + fair value gap), a realistic backtester, a
+strategy-independent risk manager, and a paper-trading loop. It never sends live orders.
 
-> **No result here is a promise.** The strategy has **not** been validated on real data in this
-> repository yet (see [Status of results](#status-of-results)). Run the backtest with your own
-> Alpaca keys and judge the untouched test period before trusting it with anything.
+> **No result here is a promise.** See [Status of results](#status-of-results) for what the
+> real-data backtests found. Judge the untouched test period before trusting any strategy.
 
 ## Quick start
 
@@ -28,20 +28,33 @@ check that everything works. **Synthetic results mean nothing about real markets
 
 ## Strategy
 
-Baseline: **9/21 EMA crossover on completed 5-minute candles** across
-QQQ, SPY, IWM, DIA, XLK, SMH, TQQQ, SQQQ, SOXL, VOO (configurable).
+Pick one with `strategy.type` in `config.yaml`; each has its own settings block there. All of
+them trade completed 5-minute candles across QQQ, SPY, IWM, DIA, XLK, SMH, TQQQ, SQQQ, SOXL, VOO
+(configurable) and share the rules, filters and risk management below.
 
-* **Long** when the fast EMA crosses above the slow EMA; **short** on the cross below (only if
-  shorting is enabled and the broker says the symbol is shortable and easy to borrow).
+| `type` | Idea | Stop / target |
+| --- | --- | --- |
+| `ema_cross` | fast/slow EMA crossover (9/21 by default) | ATR stop, `risk.reward_risk` target |
+| `orb` | close breaks the first 15 (or 30) minutes' high/low; one trade per side per symbol per day, until 11:30; ranges too narrow or too wide are skipped | other side of the range (or its midpoint); target from `risk.reward_risk` (0 = hold until the flatten time or an opposite breakout) |
+| `vwap_reversion` | price stretched 2+ ATRs from session VWAP, then a reversal candle (close beyond the previous candle's high/low); optional "choppy days only" via the efficiency ratio | beyond the recent extreme + 0.5 ATR; target **at VWAP**, skipped if that's under 1R |
+| `ict_fvg` | **liquidity sweep** of the prior day's low/high or the latest swing, closing back inside → **market structure shift** (close beyond the last swing point) → entry on the retest of the **fair value gap** left by the move | just beyond the sweep extreme; target from `risk.reward_risk` |
+
+Strategies that place their own stop or target hand them over as price levels from the signal
+candle's close, so the backtest and the paper bot use the same levels; `risk.stop` min/max %
+still bound the stop.
+
+* **Shorts** only if shorting is enabled and the broker says the symbol is shortable and easy
+  to borrow.
 * Signals use completed candles only and execute at the **next candle's open**. Each candle's
   signal is acted on once; after an exit, a new entry needs a genuinely new cross.
 * Entries between 09:45 and 15:30 New York time; everything is closed at 15:50 (or 10 minutes
   before an early close, from the exchange calendar). No overnight positions.
 * ATR and the chop filter are measured within the session, so an overnight gap doesn't
   inflate stops or make a choppy morning look like a trend.
-* An opposite cross closes the position (and can reverse it).
+* An opposite signal (EMA cross, opposite ORB breakout) closes the position (and can reverse it).
 
-Four lightweight, optional filters (off by default except liquidity; each can be toggled):
+Four lightweight, optional filters (off by default except liquidity; each can be toggled; the
+backtest only tries the trend/ATR/chop filters on the EMA strategy):
 
 | Filter | Rule |
 | --- | --- |
@@ -60,7 +73,7 @@ Per trade (all in `config.yaml`):
 * **Risk 0.25% of equity per trade** by default. The backtest sweeps 0.25 / 0.375 / 0.5 / 0.75%
   and recommends a level (see [Backtesting](#backtesting)). Shares = risk ÷ (stop distance + a
   0.02% gap buffer + estimated costs), never a fixed dollar amount.
-* **ATR stop**: 1.5 × ATR(14), clamped to 0.15–1.5% of price (or a fixed % stop). The backtest
+* **ATR stop**: 1.5 × ATR(14), clamped to 0.15–3% of price (or a fixed % stop). The backtest
   also tests a **wide stop** (3 × ATR, at least 0.30%) with a 1.5R target.
 * **Take profit at 2R** (1.5R tested), optional trailing stop, exit on an opposite cross.
 * Max **3 positions**, max **2 in the same correlation group and direction**, max **4x
@@ -102,9 +115,12 @@ paper bot trades on; set `backtest.data_feed: sip` for all exchanges), trims ear
 the exchange calendar, caches everything per symbol and month under `data/cache/` (re-downloading
 a symbol's months together whenever one is missing, so split/dividend adjustments match), and then:
 
-1. Simulates **10 configurations** on the **train** (2023-01 → 2024-06) and **validation**
-   (2024-07 → 2025-03) periods: **your config.yaml exactly as the bot will trade it**, EMA 9/21,
-   10/30, 20/50, 1.5R vs 2R, wide stops (9/21 and 20/50), filtered versions, filtered + chop.
+1. Simulates a fixed set of configurations on the **train** (2023-01 → 2024-06) and
+   **validation** (2024-07 → 2025-03) periods: **your config.yaml exactly as the bot will trade
+   it**, then per strategy family: EMA (9/21, 10/30, 20/50, 1.5R vs 2R, wide stops, filtered,
+   filtered + chop), ORB (15/30-minute range, range/mid stop, hold vs 2R, VWAP side), VWAP fade
+   (2.0/2.5 ATR, choppy days only) and ICT (2R, 3R, slower swings). `--strategies orb,ict` limits
+   the comparison to some families.
 2. Rejects any config that loses money after costs in either period or trades outside **4–15
    times per session**. Of the rest, picks the highest **min(train, validation) t-stat of mean
    R**, minus 0.15 per filter.
@@ -199,7 +215,7 @@ $25,000 and `verify` warns about it.
 | `bot/config.py` | config loading and validation (fails safely) |
 | `bot/data.py` | Alpaca candles, regular-hours filter, monthly disk cache, synthetic candles for `--synthetic` |
 | `bot/indicators.py` | EMA, ATR, efficiency ratio, closed higher-timeframe candles |
-| `bot/strategy.py` | `EmaCross` strategy and stop distance |
+| `bot/strategy.py` | the four strategies (`EmaCross`, `OpeningRangeBreakout`, `VwapReversion`, `IctSweepFvg`), shared filters, stop distance |
 | `bot/costs.py` | spread, slippage and fee model |
 | `bot/risk.py` | challenge risk manager and position sizing |
 | `bot/sim.py` | intraday portfolio simulator |

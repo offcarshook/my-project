@@ -24,6 +24,7 @@ import pandas as pd
 from bot.config import BotConfig
 from bot.costs import CostModel
 from bot.indicators import ny_index
+from bot.strategy import clamp_stop
 from bot.risk import FLATTEN_LOCK, TARGET_HIT, OpenPosition, RiskManager, size_position
 
 TRADE_COLUMNS = ["symbol", "side", "qty", "entry_ts", "entry", "stop", "target", "exit_ts", "exit",
@@ -79,6 +80,11 @@ class Simulator:
 
         self.open, self.high, self.low, self.close = grid("open"), grid("high"), grid("low"), grid("close")
         self.atr = grid("atr")
+        # Strategy-placed stops/targets, as price LEVELS anchored at the signal candle's close
+        # (NaN = the strategy leaves it to risk.stop / risk.reward_risk).
+        sd = grid("stop_dist") if all("stop_dist" in f for f in frames.values()) else np.full((n, m), np.nan)
+        td = grid("target_dist") if all("target_dist" in f for f in frames.values()) else np.full((n, m), np.nan)
+        self.stop_dist, self.target_dist = sd, td
         self.cross = np.nan_to_num(grid("cross", 0.0)).astype(int)
         sig = np.zeros((n, m), dtype=int)
         for k, s in enumerate(self.symbols):
@@ -125,7 +131,7 @@ class Simulator:
         cash, realized = cash0, 0.0
         positions: dict[int, _Pos] = {}
         trades, curve, decisions = [], [], []
-        pending: dict[int, tuple[int, int, float]] = {}   # k -> (cross, signal, atr) from the previous candle
+        pending: dict[int, tuple] = {}   # k -> (cross, signal, atr, stop level, target level) from the previous candle
         day, trades_today, halted = None, 0, False
         equity_prev = cash0
 
@@ -175,13 +181,13 @@ class Simulator:
                     pending = {}
                 else:
                     # 1. orders from the previous candle's signals, at this candle's open
-                    for k, (cross, sig, atr_k) in list(pending.items()):
+                    for k, (cross, sig, atr_k, _, _) in list(pending.items()):
                         if np.isnan(o[k]):
                             continue
                         p = positions.get(k)
                         if p is not None and st.exit_on_opposite and cross == (-1 if p.qty > 0 else 1):
                             close_pos(k, i, o[k], "opposite signal")
-                    for k, (cross, sig, atr_k) in pending.items():
+                    for k, (cross, sig, atr_k, stop_lvl, tgt_lvl) in pending.items():
                         if sig == 0 or np.isnan(o[k]) or k in positions or (sig < 0 and not st.allow_short):
                             continue
                         if rm is not None and not rm.can_open():
@@ -189,7 +195,15 @@ class Simulator:
                         sym = self.symbols[k]
                         inst = cfg.instrument(sym)
                         ref = o[k]
-                        stop_dist = _stop_dist(ref, atr_k, rk.stop)
+                        if np.isnan(stop_lvl):
+                            stop_dist = _stop_dist(ref, atr_k, rk.stop)
+                        else:
+                            stop_dist = (ref - stop_lvl) * sig
+                            if stop_dist <= 0:
+                                continue   # opened through the strategy's stop: setup already invalid
+                            stop_dist = clamp_stop(ref, stop_dist, rk.stop)
+                        if not np.isnan(tgt_lvl) and (tgt_lvl - ref) * sig <= 0:
+                            continue       # target already reached at the open
                         room = rm.risk_room(equity_prev) if rm is not None else math.inf
                         res = size_position(sym, sig, ref, stop_dist, equity_prev, open_list(i), rk, inst.group,
                                             inst.leverage, room, trades_today, costs.per_share_estimate(sym, ref))
@@ -198,7 +212,10 @@ class Simulator:
                         fill = costs.market_fill(sym, sig, ref)
                         fee = costs.fees(res.qty, fill, is_sell=sig < 0)
                         cash -= sig * res.qty * fill + fee
-                        target = fill + sig * stop_dist * rk.reward_risk if rk.reward_risk else None
+                        if not np.isnan(tgt_lvl):
+                            target = tgt_lvl
+                        else:
+                            target = fill + sig * stop_dist * rk.reward_risk if rk.reward_risk else None
                         positions[k] = _Pos(sym, sig * res.qty, fill, fill - sig * stop_dist, target, t,
                                             res.qty * stop_dist, fee, atr_k, fill, inst.group, inst.leverage,
                                             res.details["reserve_per_share"], abs(fill - ref) * res.qty + fee)
@@ -280,7 +297,11 @@ class Simulator:
             # 5. queue this candle's signals for the next open (same session, before flatten time)
             if not halted and i + 1 < hi and not self.last_of_day[i] and not self.flatten[i + 1] and i in self.events:
                 for k in self.events[i]:
-                    pending[k] = (int(self.cross[i, k]), int(self.signal[i, k]), float(self.atr[i, k]))
+                    sig_k, close_k = int(self.signal[i, k]), self.close[i, k]
+                    sd_k, td_k = self.stop_dist[i, k], self.target_dist[i, k]
+                    pending[k] = (int(self.cross[i, k]), sig_k, float(self.atr[i, k]),
+                                  close_k - sig_k * sd_k if sig_k else np.nan,
+                                  close_k + sig_k * td_k if sig_k else np.nan)
 
         equity_df = pd.DataFrame(curve, columns=["ts", "equity", "worst", "balance", "exposure", "positions"])
         equity_df = equity_df.set_index("ts")

@@ -45,8 +45,23 @@ class FilterConfig:
         return [name for name in ("htf_trend", "atr_band", "liquidity", "chop") if getattr(self, name)["enabled"]]
 
 
+STRATEGY_TYPES = ("ema_cross", "orb", "vwap_reversion", "ict_fvg")
+STRATEGY_PARAMS = {
+    # Opening range breakout
+    "orb": {"minutes": 15, "stop": "range", "last_entry": "11:30", "min_range_pct": 0.15,
+            "max_range_pct": 2.5, "vwap_confirm": False, "max_trades_per_side": 1},
+    # Fade stretched moves back to the session VWAP
+    "vwap": {"dev_atr": 2.0, "stop_buffer_atr": 0.5, "min_rr": 1.0, "first_entry": "10:00",
+             "last_entry": "15:00", "max_efficiency": 1.0, "max_trades_per_side": 2},
+    # ICT: liquidity sweep -> market structure shift -> fair value gap retest
+    "ict": {"pivot": 2, "mss_window": 12, "entry_window": 6, "min_fvg_atr": 0.1,
+            "stop_buffer_atr": 0.1, "max_trades_per_side": 1},
+}
+
+
 @dataclass
 class StrategyConfig:
+    type: str = "ema_cross"
     timeframe: str = "5Min"
     fast: int = 9
     slow: int = 21
@@ -56,6 +71,9 @@ class StrategyConfig:
     entry_end: str = "15:30"
     flatten_at: str = "15:50"
     filters: FilterConfig = field(default_factory=FilterConfig)
+    orb: dict = field(default_factory=lambda: dict(STRATEGY_PARAMS["orb"]))
+    vwap: dict = field(default_factory=lambda: dict(STRATEGY_PARAMS["vwap"]))
+    ict: dict = field(default_factory=lambda: dict(STRATEGY_PARAMS["ict"]))
 
 
 @dataclass
@@ -63,7 +81,7 @@ class StopConfig:
     type: str = "atr"
     atr_mult: float = 1.5
     min_pct: float = 0.15
-    max_pct: float = 1.5
+    max_pct: float = 3.0
     fixed_pct: float = 0.3
 
 
@@ -217,8 +235,21 @@ def parse_config(raw: dict) -> BotConfig:
         if unknown:
             raise ConfigError(f"Unknown setting(s) in strategy.filters.{name}: {', '.join(sorted(unknown))}")
         setattr(filters, name, {**getattr(filters, name), **values})
+    params = {}
+    for name, defaults in STRATEGY_PARAMS.items():
+        values = s_raw.pop(name, None) or {}
+        if not isinstance(values, dict):
+            raise ConfigError(f"strategy.{name} must be a mapping")
+        unknown = set(values) - set(defaults)
+        if unknown:
+            raise ConfigError(f"Unknown setting(s) in strategy.{name}: {', '.join(sorted(unknown))}")
+        params[name] = {**defaults, **values}
     strategy = _build(StrategyConfig, s_raw, "strategy")
     strategy.filters = filters
+    strategy.orb, strategy.vwap, strategy.ict = params["orb"], params["vwap"], params["ict"]
+    if strategy.type not in STRATEGY_TYPES:
+        raise ConfigError(f"strategy.type must be one of {STRATEGY_TYPES}, got {strategy.type!r}")
+    _check_strategy_params(strategy)
     if strategy.timeframe not in TF_MINUTES or strategy.timeframe == "1Day":
         raise ConfigError(f"strategy.timeframe must be an intraday Alpaca timeframe "
                           f"({', '.join(t for t in TF_MINUTES if t != '1Day')}), got {strategy.timeframe!r}")
@@ -319,6 +350,31 @@ def _check_filters(f: FilterConfig, bar_minutes: int) -> None:
     for ok, message in checks:
         if not ok:
             raise ConfigError(f"strategy.filters.{message}")
+
+
+def _check_strategy_params(st: StrategyConfig) -> None:
+    o, v, i = st.orb, st.vwap, st.ict
+    for where, key in (("orb", "last_entry"), ("vwap", "first_entry"), ("vwap", "last_entry")):
+        getattr(st, where)[key] = _time(getattr(st, where)[key], f"strategy.{where}.{key}")
+    checks = [
+        (o["minutes"] > 0, "orb.minutes must be > 0"),
+        (o["stop"] in ("range", "mid"), "orb.stop must be 'range' or 'mid'"),
+        (0 <= o["min_range_pct"] < o["max_range_pct"], "need 0 <= orb.min_range_pct < orb.max_range_pct"),
+        (isinstance(o["vwap_confirm"], bool), "orb.vwap_confirm must be true or false"),
+        (v["dev_atr"] > 0, "vwap.dev_atr must be > 0"),
+        (v["stop_buffer_atr"] >= 0, "vwap.stop_buffer_atr can't be negative"),
+        (v["min_rr"] >= 0, "vwap.min_rr can't be negative"),
+        (0 < v["max_efficiency"] <= 1, "vwap.max_efficiency must be in (0, 1]"),
+        (v["first_entry"] < v["last_entry"], "need vwap.first_entry < vwap.last_entry"),
+        (i["pivot"] >= 1, "ict.pivot must be >= 1"),
+        (i["mss_window"] >= 1 and i["entry_window"] >= 1, "ict windows must be >= 1"),
+        (i["min_fvg_atr"] >= 0 and i["stop_buffer_atr"] >= 0, "ict sizes can't be negative"),
+    ]
+    for d in (o, v, i):
+        checks.append((int(d["max_trades_per_side"]) >= 1, "max_trades_per_side must be >= 1"))
+    for ok, message in checks:
+        if not ok:
+            raise ConfigError(f"strategy.{message}")
 
 
 def _check_periods(b: BacktestSettings) -> None:

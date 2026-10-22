@@ -91,7 +91,14 @@ def test_variants_include_config_as_is_and_keep_liquidity():
         assert c.strategy.filters.liquidity["enabled"] == cfg.strategy.filters.liquidity["enabled"], name
     wide = v["EMA 9/21 wide stop"].risk.stop
     assert wide.atr_mult == 3.0 and wide.min_pct == 0.30
-    assert len(v) <= 10
+    types = {c.strategy.type for c in v.values()}
+    assert types == {"ema_cross", "orb", "vwap_reversion", "ict_fvg"}
+    assert v["ORB 15m, range stop, hold"].risk.reward_risk == 0
+    assert not v["ICT sweep+MSS+FVG 2R"].strategy.filters.htf_trend["enabled"]
+    only = variants(cfg, ("orb",))
+    assert {c.strategy.type for n, c in only.items() if n != "config.yaml as-is"} == {"orb"}
+    with pytest.raises(ValueError):
+        variants(cfg, ("macd",))
 
 
 def test_luck_baseline_removes_the_edge():

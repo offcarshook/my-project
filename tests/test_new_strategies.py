@@ -223,3 +223,45 @@ def test_factory_builds_each_type():
         c = cfg()
         c.type = t
         assert isinstance(build_strategy(c), cls)
+
+
+# ---- noise-area momentum -------------------------------------------------------------
+from bot.strategy import EXIT_ANY, NoiseBreakout, closes_position  # noqa: E402
+
+
+def noise_days(today_closes):
+    """15 quiet sessions moving +-0.2% from the open, then today (open 100)."""
+    days = []
+    for d in pd.bdate_range("2025-12-08", periods=15):
+        rows = [(100, 100.25, 99.75, 100.2 if j % 2 == 0 else 99.8) for j in range(78)]
+        days.append(bars(rows, d.strftime("%Y-%m-%d")))
+    rows = [(100, max(100, c) + 0.05, min(100, c) - 0.05, c) for c in today_closes]
+    return pd.concat(days + [bars(rows, "2026-01-05")])
+
+
+TODAY = [100.1] * 5 + [100.5] * 6 + [100.0] + [100.0] * 20       # breaks out at 10:00, back in at 10:30
+Q = 15 * 78
+
+
+def test_noise_breakout_enters_on_a_check_and_exits_back_inside():
+    df = NoiseBreakout(cfg()).compute(noise_days(TODAY))
+    sig = df["signal"].iloc[Q:]
+    assert list(sig.index[sig == BUY]) == [df.index[Q + 5]]           # the candle ending 10:00
+    assert df["upper"].iloc[Q + 5] == pytest.approx(100 * 1.002)       # band = average 0.2% move
+    assert df["stop_dist"].iloc[Q + 5] == pytest.approx(100.5 - 100)   # back to the open
+    assert df["cross"].iloc[Q + 11] == EXIT_ANY                         # 10:30 check: back inside
+    assert (df["cross"].iloc[Q + 6:Q + 11] == 0).all()                  # nothing between checks
+    assert closes_position(EXIT_ANY, True) and closes_position(EXIT_ANY, False)
+    assert closes_position(-1, True) and not closes_position(-1, False)
+
+
+def test_noise_breakout_is_selective_and_has_no_look_ahead():
+    days = noise_days(TODAY)
+    full = NoiseBreakout(cfg()).compute(days)
+    part = NoiseBreakout(cfg()).compute(days.iloc[:Q + 8])
+    pd.testing.assert_series_equal(full["signal"].iloc[:Q + 8], part["signal"])
+    pd.testing.assert_series_equal(full["upper"].iloc[:Q + 8], part["upper"])
+    wide = NoiseBreakout(cfg(noise={"band_mult": 3.0})).compute(days)  # 0.6% band: 100.5 isn't enough
+    assert (wide["signal"].iloc[Q:] == HOLD).all()
+    hourly = NoiseBreakout(cfg(noise={"check_minutes": 60})).compute(days)
+    assert (hourly["signal"].iloc[Q:] == HOLD).all()                    # 10:00 isn't checked; by 10:30 it's back in

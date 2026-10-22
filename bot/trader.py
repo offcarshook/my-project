@@ -31,7 +31,7 @@ from bot.costs import CostModel
 from bot.data import TF_MINUTES
 from bot.http import ApiError
 from bot.risk import FLATTEN_LOCK, OK, PASSED, TARGET_HIT, OpenPosition, RiskManager, size_position
-from bot.strategy import BUY, SELL, build_strategy, clamp_stop, stop_distance
+from bot.strategy import BUY, SELL, build_strategy, clamp_stop, closes_position, stop_distance
 
 log = logging.getLogger("propbot")
 NY = "America/New_York"
@@ -436,7 +436,7 @@ class Trader:
         if cross:
             self.event("signal", symbol=sym, candle=ts.isoformat(), cross=cross, signal=signal,
                        close=float(last["close"]))
-        if held and st.exit_on_opposite and cross == (-1 if held["qty"] > 0 else 1):
+        if held and st.exit_on_opposite and closes_position(cross, held["qty"] > 0):
             if not self._exit(sym, "opposite signal"):
                 return
             held = None

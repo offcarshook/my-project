@@ -14,6 +14,12 @@ import pandas as pd
 from bot.indicators import NY, atr, efficiency_ratio, ema, htf_close_and_ema, ny_index
 
 BUY, SELL, HOLD = "BUY", "SELL", "HOLD"
+EXIT_ANY = 2     # `cross` value that closes a position on either side
+
+
+def closes_position(cross: int, long: bool) -> bool:
+    """Does this candle's `cross` close an open long (or short)?"""
+    return cross == EXIT_ANY or cross == (-1 if long else 1)
 
 
 def stop_distance(price, atr_value, stop) -> float | np.ndarray:
@@ -177,6 +183,8 @@ class OpeningRangeBreakout(_Base):
     def __init__(self, cfg, stop=None, bar_minutes: int = 5, data_feed: str = "sip"):
         super().__init__(cfg, stop, bar_minutes, data_feed)
         self.lines = {"or_high": "OR high", "or_low": "OR low", "vwap": "VWAP"}
+        if cfg.orb["trend"] != "off" or cfg.orb["min_rvol"] > 0:   # 20-session history for those
+            self.warmup = max(self.warmup, 22 * 390 // bar_minutes)
 
     def compute(self, df: pd.DataFrame) -> pd.DataFrame:
         p = self.cfg.orb
@@ -438,8 +446,62 @@ class IctSweepFvg(_Base):
         return state, None
 
 
+# ---------------------------------------------------------------------------
+# Noise-area intraday momentum
+# ---------------------------------------------------------------------------
+class NoiseBreakout(_Base):
+    """Trade only moves that leave the day's normal "noise area" (after Zarattini, Aziz & Barbon,
+    "Beat the Market", 2024).
+
+    Band for each time of day: the average absolute move from the session open at that time over
+    the last `lookback` sessions (prior sessions only), times `band_mult`. Upper bound =
+    max(open, yesterday's close) x (1 + band); lower = min(open, yesterday's close) x (1 - band).
+    Checked only every `check_minutes` (from `first_check`): long when the close is above the
+    upper bound (and VWAP), short below the lower bound (and VWAP). At each check a long is
+    closed if price is back under max(upper bound, VWAP), a short above min(lower bound, VWAP);
+    otherwise everything is closed at the flatten time. Protective stop for sizing: the base of
+    the band (the open / yesterday's close), i.e. back across the whole noise area."""
+
+    name = "Noise-area momentum"
+
+    def __init__(self, cfg, stop=None, bar_minutes: int = 5, data_feed: str = "sip"):
+        super().__init__(cfg, stop, bar_minutes, data_feed)
+        self.warmup = max(self.warmup, (int(cfg.noise["lookback"]) + 2) * 390 // bar_minutes)
+        self.lines = {"upper": "Noise top", "lower": "Noise bottom", "vwap": "VWAP"}
+
+    def compute(self, df: pd.DataFrame) -> pd.DataFrame:
+        p = self.cfg.noise
+        df = self._prepare(df)
+        day, _ = session_info(df)
+        slot = pd.Series(ny_index(df.index).strftime("%H:%M"), index=df.index)
+        day_open = df["open"].groupby(day).transform("first")
+        move = (df["close"] / day_open - 1).abs()
+        n = int(p["lookback"])
+        sigma = move.groupby(slot).transform(lambda m: m.shift(1).rolling(n, min_periods=n).mean())
+        prev_close = day.map(df["close"].groupby(day).last().shift(1))
+        top, bottom = np.maximum(day_open, prev_close), np.minimum(day_open, prev_close)
+        band = p["band_mult"] * sigma
+        df["upper"], df["lower"] = top * (1 + band), bottom * (1 - band)
+        df["vwap"] = session_vwap(df, day)
+        end = execution_hhmm(df, self.bar_minutes)
+        minutes = end.str[:2].astype(int) * 60 + end.str[3:].astype(int)
+        fh, fm = map(int, p["first_check"].split(":"))
+        check = (minutes >= fh * 60 + fm) & ((minutes - 570) % int(p["check_minutes"]) == 0)
+        c = df["close"]
+        long_line = np.maximum(df["upper"], df["vwap"]) if p["use_vwap"] else df["upper"]
+        short_line = np.minimum(df["lower"], df["vwap"]) if p["use_vwap"] else df["lower"]
+        up, down = check & (c > long_line), check & (c < short_line)
+        exit_long, exit_short = check & (c <= long_line), check & (c >= short_line)
+        cross = np.select([up, down, exit_long & exit_short, exit_long, exit_short], [1, -1, EXIT_ANY, -1, 1], 0)
+        ok_long, ok_short = filter_masks(df, self.cfg, self.bar_minutes, self.data_feed)
+        win = self._window(df)
+        buy, sell = up & ok_long & win, down & ok_short & win
+        stop = np.where(buy, c - top, np.where(sell, bottom - c, np.nan))
+        return _finish(df, buy, sell, stop_dist=stop, cross=cross)
+
+
 STRATEGY_CLASSES = {"ema_cross": EmaCross, "orb": OpeningRangeBreakout, "vwap_reversion": VwapReversion,
-                    "ict_fvg": IctSweepFvg}
+                    "ict_fvg": IctSweepFvg, "noise_breakout": NoiseBreakout}
 
 
 def build_strategy(cfg, stop=None, bar_minutes: int = 5, data_feed: str = "sip"):

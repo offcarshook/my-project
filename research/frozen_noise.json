@@ -1,0 +1,7 @@
+{
+  "candidate": "N1 paper rules (14d band, 30-min checks, VWAP)",
+  "risk_pct": 0.5,
+  "frozen_on": "2026-10-22",
+  "chosen_on": "train 2022-03-21..2024-03-31 and validation 2024-04-01..2025-03-31 only",
+  "note": "weak even in-sample: +0.021R / +0.022R per trade, t 1.03 / 0.70"
+}

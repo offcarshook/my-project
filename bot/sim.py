@@ -24,7 +24,7 @@ import pandas as pd
 from bot.config import BotConfig
 from bot.costs import CostModel
 from bot.indicators import ny_index
-from bot.strategy import clamp_stop
+from bot.strategy import clamp_stop, closes_position
 from bot.risk import FLATTEN_LOCK, TARGET_HIT, OpenPosition, RiskManager, size_position
 
 TRADE_COLUMNS = ["symbol", "side", "qty", "entry_ts", "entry", "stop", "target", "exit_ts", "exit",
@@ -186,7 +186,7 @@ class Simulator:
                         if np.isnan(o[k]):
                             continue
                         p = positions.get(k)
-                        if p is not None and st.exit_on_opposite and cross == (-1 if p.qty > 0 else 1):
+                        if p is not None and st.exit_on_opposite and closes_position(cross, p.qty > 0):
                             close_pos(k, i, o[k], "opposite signal")
                     for k, (cross, sig, atr_k, stop_lvl, tgt_lvl) in pending.items():
                         if sig == 0 or np.isnan(o[k]) or k in positions or (sig < 0 and not st.allow_short):

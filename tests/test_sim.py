@@ -271,3 +271,14 @@ def test_strategy_stop_sits_on_its_level_after_entry_costs():
     t = Simulator(c, {"A": bars}, Levels({0: 1}, 0.5)).run().trades.iloc[0]
     assert t.entry == pytest.approx(100.1) and t.stop == pytest.approx(99.5)
     assert t.risk == pytest.approx(t.qty * 0.6)                 # R measured from the actual fill
+
+
+def test_exit_any_cross_closes_a_long():
+    class ExitAny(Given):
+        def compute(self, df):
+            df = super().compute(df)
+            df.iloc[2, df.columns.get_loc("cross")] = 2
+            return df
+    bars = day([FLAT, FLAT, FLAT, (100.3, 100.4, 100.2, 100.3), FLAT])
+    t = Simulator(cfg(), {"A": bars}, ExitAny({0: 1})).run().trades.iloc[0]
+    assert t.reason == "opposite signal" and t.exit == pytest.approx(100.3)

@@ -45,8 +45,10 @@ class FilterConfig:
         return [name for name in ("htf_trend", "atr_band", "liquidity", "chop") if getattr(self, name)["enabled"]]
 
 
-STRATEGY_TYPES = ("ema_cross", "orb", "vwap_reversion", "ict_fvg")
+STRATEGY_TYPES = ("ema_cross", "orb", "vwap_reversion", "ict_fvg", "noise_breakout")
 STRATEGY_PARAMS = {
+    # Noise-area intraday momentum
+    "noise": {"lookback": 14, "band_mult": 1.0, "check_minutes": 30, "first_check": "10:00", "use_vwap": True},
     # Opening range breakout
     "orb": {"minutes": 15, "stop": "range", "last_entry": "11:30", "min_range_pct": 0.15,
             "max_range_pct": 2.5, "vwap_confirm": False, "max_trades_per_side": 1,
@@ -75,6 +77,7 @@ class StrategyConfig:
     orb: dict = field(default_factory=lambda: dict(STRATEGY_PARAMS["orb"]))
     vwap: dict = field(default_factory=lambda: dict(STRATEGY_PARAMS["vwap"]))
     ict: dict = field(default_factory=lambda: dict(STRATEGY_PARAMS["ict"]))
+    noise: dict = field(default_factory=lambda: dict(STRATEGY_PARAMS["noise"]))
 
 
 @dataclass
@@ -359,7 +362,8 @@ def _check_filters(f: FilterConfig, bar_minutes: int) -> None:
 
 def _check_strategy_params(st: StrategyConfig) -> None:
     o, v, i = st.orb, st.vwap, st.ict
-    for where, key in (("orb", "last_entry"), ("vwap", "first_entry"), ("vwap", "last_entry")):
+    nz = st.noise
+    for where, key in (("orb", "last_entry"), ("vwap", "first_entry"), ("vwap", "last_entry"), ("noise", "first_check")):
         getattr(st, where)[key] = _time(getattr(st, where)[key], f"strategy.{where}.{key}")
     if o["trend"] is False:          # YAML reads a bare `off` as false
         o["trend"] = "off"
@@ -367,6 +371,10 @@ def _check_strategy_params(st: StrategyConfig) -> None:
         (o["minutes"] > 0, "orb.minutes must be > 0"),
         (o["stop"] in ("range", "mid", "atr"), "orb.stop must be 'range', 'mid' or 'atr'"),
         (o["buffer_atr"] >= 0, "orb.buffer_atr can't be negative"),
+        (int(nz["lookback"]) >= 2, "noise.lookback must be >= 2"),
+        (nz["band_mult"] > 0, "noise.band_mult must be > 0"),
+        (nz["check_minutes"] > 0 and nz["check_minutes"] % 5 == 0, "noise.check_minutes must be a positive multiple of 5"),
+        (isinstance(nz["use_vwap"], bool), "noise.use_vwap must be true or false"),
         (o["min_rvol"] >= 0, "orb.min_rvol can't be negative"),
         (o["trend"] in ("off", "own"), "orb.trend must be 'off' or 'own'"),
         (o["entry"] in ("close", "retest"), "orb.entry must be 'close' or 'retest'"),

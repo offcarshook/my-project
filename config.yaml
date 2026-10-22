@@ -36,6 +36,7 @@ strategy:
   # orb             opening range breakout (strategy.orb)
   # vwap_reversion  fade stretched moves back to VWAP (strategy.vwap)
   # ict_fvg         liquidity sweep -> market structure shift -> fair value gap retest (strategy.ict)
+  # noise_breakout  break out of the day's normal noise band, checked every 30 min (strategy.noise)
   # Strategies that place their own stop/target use them as price levels; risk.stop min/max_pct
   # still bound the stop, and risk.reward_risk sets the target when the strategy doesn't.
   type: ema_cross
@@ -78,6 +79,12 @@ strategy:
     last_entry: "15:00"
     max_efficiency: 1.0    # < 1 skips clean trends (efficiency ratio above this)
     max_trades_per_side: 2
+  noise:
+    lookback: 14           # sessions used for the average move from the open at each time of day
+    band_mult: 1.0         # band = band_mult x that average move (higher = more selective)
+    check_minutes: 30      # entries and exits are only checked this often ...
+    first_check: "10:00"   # ... starting at this time (New York)
+    use_vwap: true         # also require price beyond VWAP; exit when it crosses back
   ict:
     pivot: 2               # swing = fractal with this many candles on each side
     mss_window: 12         # candles allowed between the sweep and the structure shift

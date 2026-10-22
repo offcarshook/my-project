@@ -37,6 +37,7 @@ them trade completed 5-minute candles across QQQ, SPY, IWM, DIA, XLK, SMH, TQQQ,
 | `ema_cross` | fast/slow EMA crossover (9/21 by default) | ATR stop, `risk.reward_risk` target |
 | `orb` | close breaks the first 15 (or 30) minutes' high/low; one trade per side per symbol per day, until 11:30; ranges too narrow or too wide are skipped | other side of the range (or its midpoint); target from `risk.reward_risk` (0 = hold until the flatten time or an opposite breakout) |
 | `vwap_reversion` | price stretched 2+ ATRs from session VWAP, then a reversal candle (close beyond the previous candle's high/low); optional "choppy days only" via the efficiency ratio | beyond the recent extreme + 0.5 ATR; target **at VWAP**, skipped if that's under 1R |
+| `noise_breakout` | price leaves the day's normal **noise band** (average move from the open at that time of day, last 14 sessions), checked every 30 min, beyond VWAP | back to the open/yesterday's close; exits at a check when price is back inside the band or across VWAP |
 | `ict_fvg` | **liquidity sweep** of the prior day's low/high or the latest swing, closing back inside → **market structure shift** (close beyond the last swing point) → entry on the retest of the **fair value gap** left by the move | just beyond the sweep extreme; target from `risk.reward_risk` |
 
 Strategies that place their own stop or target hand them over as price levels from the signal
@@ -189,22 +190,24 @@ $25,000 and `verify` warns about it.
 
 ## Status of results
 
-* **Unit tests: 133 passing** (`python -m pytest`), covering signals and no-look-ahead, filters,
-  position sizing, correlation and exposure limits, every drawdown method, daily resets, locks,
-  fills/gaps/ties in the simulator, costs, the risk sweep's luck gate, order duplication across
-  restarts, session shutdown, the kill switch and reconciliation (against fake brokers, one of
-  which mimics Alpaca's nested bracket legs and held-for-orders refusals).
-* **Code review:** a multi-agent review found 30 issues (each confirmed by a separate skeptic)
-  plus 11 improvement ideas; all are fixed or applied.
-* **Real-data backtest: not run in this repository.** The environment it was built in can't
-  reach Alpaca or any market-data provider, and no keys were available. There is no real
-  performance number here, and none should be inferred.
-* **Pipeline check on synthetic random-walk prices: runs end to end** (~3 minutes). On random
-  prices every configuration loses after costs and selection correctly reports that none
-  qualifies, which is the expected result for data with no edge. That output is not included,
-  to avoid it being mistaken for performance.
-* **Paper trading against the real Alpaca API: not run** (no connectivity/credentials). It's
-  tested against a fake broker; run `python propbot.py verify` first.
+* **Unit tests: 162 passing** (`python -m pytest`): signals and no-look-ahead for every strategy,
+  filters, sizing, correlation/exposure limits, every drawdown method, minimum trading days and
+  consistency rules, simulator fills/gaps/ties, costs, order duplication, shutdown, kill switch,
+  reconciliation (fake brokers).
+* **Real-data backtests** (5-minute FirstRate data for QQQ, SPY, XLK, IWM, SOXL, Mar 2022 to Oct
+  2026; train Mar 2022-Mar 2024, validation Apr 2024-Mar 2025, then Apr 2025-Oct 2026):
+  * EMA crossover (10 configs), VWAP fade (3), ICT sweep+MSS+FVG (3): lose money after costs in
+    train/validation.
+  * Opening range breakout: profitable after costs in train and validation (+0.06R / +0.12R per
+    trade, survives parameter nudges, leave-one-ETF-out, costs x1.5, and beats random-direction
+    entries), but **flat to negative on Apr 2025-Oct 2026** (original -0.01R, best frozen variant
+    -0.02R; challenge pass rates at or below a zero-edge luck baseline). That period had already
+    been used once, so it is not an untouched test; there is no untouched data left.
+  * Noise-area momentum: barely positive in train/validation (+0.02R, not significant), -0.01R
+    on Apr 2025-Oct 2026.
+  * Details: `research/results/`, scripts: `research/orb_study.py`, `research/noise_study.py`.
+* **No strategy here has a demonstrated out-of-sample edge.** Paper trading against the real
+  Alpaca API has not been run from this repository (tested against fake brokers).
 
 ## Layout
 
@@ -223,6 +226,7 @@ $25,000 and `verify` warns about it.
 | `bot/montecarlo.py` | reshuffled-day challenge simulation |
 | `bot/broker.py`, `bot/trader.py`, `bot/http.py` | paper broker client, trading loop, retries |
 | `app.py` | read-only dashboard (status + latest report) |
+| `research/` | strategy studies (train/validation discipline, frozen configs, results) |
 | `tests/` | `python -m pytest` |
 
 ### Dashboard

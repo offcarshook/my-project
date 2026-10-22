@@ -4,6 +4,7 @@ Run with:  streamlit run app.py
 """
 from datetime import datetime, timedelta, timezone
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -13,6 +14,7 @@ from bot.book import FAILED, PASSED, ChallengeRules, RiskConfig
 from bot.config import Settings
 from bot.data import TF_MINUTES, DemoData, local_market_is_open, make_feed
 from bot.engine import run_tick
+from bot.montecarlo import daily_trade_returns, simulate_luck
 from bot.paper import PaperAccount
 from bot.strategy import SmaCross, VwapPullback
 
@@ -285,6 +287,53 @@ def pct(x: float) -> str:
     return f"{x:+.1f}%"
 
 
+def luck_panel(main, cash: float):
+    st.subheader("🎲 Luck simulator")
+    closed = main.trades.dropna(subset=["pnl"])
+    if len(closed) < 20:
+        st.info("Needs at least 20 closed trades in the backtest. Pick more months.")
+        return
+    n_days = max(round(window * 252 / 365), 1)
+    st.caption(f"Takes the {len(closed)} real backtest trades, shuffles whole trading days into 5,000 "
+               f"random {n_days}-trading-day challenges, and applies the prop rules after every trade. "
+               "Shows how much passing comes down to luck. It can't fix a strategy with no edge.")
+    days = daily_trade_returns(main.trades, main.equity, cash)
+    res = simulate_luck(days, rules if challenge_on else ChallengeRules(), n_days=n_days)
+
+    def share(x: float) -> str:
+        return f"{x * 100:.1f}%" if 0 < x < 0.01 or 0.99 < x < 1 else f"{x * 100:.0f}%"
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Pass chance", share(res.pass_rate))
+    k2.metric("Blow-up chance", share(res.fail_rate))
+    k3.metric("Out of time", share(res.timeout_rate))
+    k4.metric("Typical days to pass", f"{np.median(res.days_to_pass):.0f}" if len(res.days_to_pass) else "—",
+              f"fastest {res.days_to_pass.min()}" if len(res.days_to_pass) else None, delta_color="off")
+
+    r = res.period_returns
+    st.markdown(f"**A {window}-day stretch with no rules:** typical **{np.median(r):+.1f}%** · "
+                f"best 5% of runs **{np.percentile(r, 95):+.1f}%+** · worst 5% **{np.percentile(r, 5):+.1f}%** · "
+                f"chance of +{target:g}%: **{(r >= target).mean() * 100:.0f}%** · "
+                f"+20%: **{(r >= 20).mean() * 100:.0f}%** · "
+                f"losing: **{(r < 0).mean() * 100:.0f}%**")
+    edges = np.linspace(max(r.min(), -60), min(r.max(), 60), 41)
+    counts, edges = np.histogram(np.clip(r, edges[0], edges[-1]), bins=edges)
+    mids = (edges[:-1] + edges[1:]) / 2
+    fig = go.Figure(go.Bar(x=mids, y=counts / len(r) * 100, width=np.diff(edges),
+                           marker_color=["#16a34a" if m >= target else "#dc2626" if m <= -max_dd else "#9ca3af"
+                                         for m in mids]))
+    fig.add_vline(x=target, line_dash="dot", line_color="#16a34a")
+    fig.add_vline(x=-max_dd, line_dash="dot", line_color="#dc2626")
+    fig.update_layout(height=280, margin=dict(l=10, r=10, t=10, b=10), xaxis_ticksuffix="%",
+                      yaxis_ticksuffix="%", xaxis_title=f"Return over {window} days", yaxis_title="Share of runs",
+                      bargap=0.05)
+    st.plotly_chart(fig, width="stretch")
+    if challenge_on and res.fail_rate:
+        n = len(res.period_returns)
+        reasons = ", ".join(f"{k} {v / n * 100:.0f}%" for k, v in res.fail_reasons.items() if v)
+        st.caption(f"How the blow-ups happened: {reasons}")
+
+
 def backtest_panel():
     st.caption(f"Replays the exact rules from the sidebar ({mode}, {timeframe} bars) on past prices. "
                "Stops and targets trigger on each bar's high/low and fill at their level, so a gap "
@@ -402,6 +451,8 @@ def backtest_panel():
                           title=f"Monthly returns · {int((monthly > 0).sum())} green / "
                                 f"{int((monthly <= 0).sum())} red months")
         st.plotly_chart(fig, width="stretch")
+
+    luck_panel(main, cash)
 
     closed = main.trades.dropna(subset=["pnl"])
     if not closed.empty:

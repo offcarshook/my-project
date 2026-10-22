@@ -89,6 +89,10 @@ exact sidebar settings (mode, bar size, leverage, stops…) on past prices and s
 - a comparison against simply **buying and holding QQQ**
 - realized P&L per symbol and the full trade list
 
+- **🎲 Luck simulator:** reshuffles the backtest's real trading days into 5,000 random challenges
+  and shows your pass chance, blow-up chance, typical days to pass, and the spread of possible
+  30-day returns (typical, best 5%, worst 5%, chance of +8% / +20%)
+
 Intraday backtests go back up to 24 months, daily ones up to 8 years.
 
 ## Real-data check (no keys needed)
@@ -121,6 +125,7 @@ which needs Alpaca 5-minute data.
 | `bot/book.py` | Positions, leverage, stops, shorting, challenge rules (shared by live + backtest) |
 | `bot/paper.py` | Saves the live book to SQLite between ticks |
 | `bot/engine.py` | One bot tick: fetch → signal → trade |
+| `bot/montecarlo.py` | Luck simulator (reshuffled challenges) |
 | `bot/backtest.py` | Historical replay, challenge simulator, buy-and-hold benchmark |
 | `scripts/real_data_sim.py` | Simulation on real daily index history |
 | `tests/` | `python -m pytest` |

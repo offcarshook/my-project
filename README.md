@@ -23,6 +23,8 @@ sell (or short) when it crosses back below.
 
 ## Modes
 
+🏆 **Prop Pass** (default) is the original crossover idea tuned for a challenge: SMA 9/21 on 5-minute candles across the 10 ETFs, 0.5% risk per trade, 0.3% stop, 2x take profit, up to 30 trades a day, longs and shorts, flat by 4pm, stops trading at +8%.
+
 🔥 **ETF Scalper** runs the VWAP pullback on 1-minute candles across 10 liquid ETFs (QQQ, SPY, IWM, DIA, XLK, SMH, TQQQ, SQQQ, SOXL, VOO) and takes roughly 15–50 trades a day.
 
 

@@ -21,6 +21,10 @@ st.set_page_config(page_title="Prop Trading Bot", page_icon="📈", layout="wide
 VWAP, SMA = VwapPullback.name, SmaCross.name
 ETF_SCALP_LIST = ["QQQ", "SPY", "IWM", "DIA", "XLK", "SMH", "TQQQ", "SQQQ", "SOXL", "VOO"]
 MODES = {
+    "🏆 Prop Pass": dict(strategy=SMA, timeframe="5Min", short=9, long=21, leverage=4.0, risk_pct=0.5,
+                        stop_pct=0.3, take_profit_pct=0.0, reward_risk=2.0, max_trades=30, allow_short=True,
+                        max_positions=4, flatten_eod=True, challenge=True, interval=15,
+                        watchlist=ETF_SCALP_LIST),
     "🔥 ETF Scalper": dict(strategy=VWAP, timeframe="1Min", fast=5, slow=13, rvol=0.0, leverage=4.0,
                           risk_pct=0.25, stop_pct=0.0, take_profit_pct=0.0, reward_risk=1.5, max_trades=50,
                           allow_short=True, max_positions=5, flatten_eod=True, challenge=True, interval=10,

@@ -49,7 +49,8 @@ STRATEGY_TYPES = ("ema_cross", "orb", "vwap_reversion", "ict_fvg")
 STRATEGY_PARAMS = {
     # Opening range breakout
     "orb": {"minutes": 15, "stop": "range", "last_entry": "11:30", "min_range_pct": 0.15,
-            "max_range_pct": 2.5, "vwap_confirm": False, "max_trades_per_side": 1},
+            "max_range_pct": 2.5, "vwap_confirm": False, "max_trades_per_side": 1,
+            "buffer_atr": 0.0, "min_rvol": 0.0, "trend": "off", "entry": "close", "retest_bars": 6},
     # Fade stretched moves back to the session VWAP
     "vwap": {"dev_atr": 2.0, "stop_buffer_atr": 0.5, "min_rr": 1.0, "first_entry": "10:00",
              "last_entry": "15:00", "max_efficiency": 1.0, "max_trades_per_side": 2},
@@ -128,6 +129,8 @@ class ChallengeSettings:
     trailing_lock_at_initial: bool = True
     stop_at_target: bool = True
     window_days: int = 30
+    min_trading_days: int = 0          # the target only counts after trading on at least this many days
+    consistency_pct: float = 0.0       # 0 = off; else the best day may be at most this % of the total profit
     confirmed_firm_rules: bool = False
 
 
@@ -307,6 +310,8 @@ def parse_config(raw: dict) -> BotConfig:
             raise ConfigError(f"challenge.{key} must be positive")
     if challenge.safety_buffer_pct < 0:
         raise ConfigError("challenge.safety_buffer_pct can't be negative")
+    if challenge.min_trading_days < 0 or not 0 <= challenge.consistency_pct <= 100:
+        raise ConfigError("challenge.min_trading_days can't be negative and consistency_pct must be in [0, 100]")
 
     missing = [s for s in watchlist if s not in instruments]
     if missing:
@@ -356,9 +361,16 @@ def _check_strategy_params(st: StrategyConfig) -> None:
     o, v, i = st.orb, st.vwap, st.ict
     for where, key in (("orb", "last_entry"), ("vwap", "first_entry"), ("vwap", "last_entry")):
         getattr(st, where)[key] = _time(getattr(st, where)[key], f"strategy.{where}.{key}")
+    if o["trend"] is False:          # YAML reads a bare `off` as false
+        o["trend"] = "off"
     checks = [
         (o["minutes"] > 0, "orb.minutes must be > 0"),
-        (o["stop"] in ("range", "mid"), "orb.stop must be 'range' or 'mid'"),
+        (o["stop"] in ("range", "mid", "atr"), "orb.stop must be 'range', 'mid' or 'atr'"),
+        (o["buffer_atr"] >= 0, "orb.buffer_atr can't be negative"),
+        (o["min_rvol"] >= 0, "orb.min_rvol can't be negative"),
+        (o["trend"] in ("off", "own"), "orb.trend must be 'off' or 'own'"),
+        (o["entry"] in ("close", "retest"), "orb.entry must be 'close' or 'retest'"),
+        (o["retest_bars"] >= 1, "orb.retest_bars must be >= 1"),
         (0 <= o["min_range_pct"] < o["max_range_pct"], "need 0 <= orb.min_range_pct < orb.max_range_pct"),
         (isinstance(o["vwap_confirm"], bool), "orb.vwap_confirm must be true or false"),
         (v["dev_atr"] > 0, "vwap.dev_atr must be > 0"),

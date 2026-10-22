@@ -262,3 +262,12 @@ def test_signal_without_a_cross_still_enters():
             return df
     bars = day([FLAT, FLAT, (100, 101.2, 99.9, 101)])
     assert len(Simulator(cfg(), {"A": bars}, NoCross({0: 1}, 0.5)).run().trades) == 1
+
+
+def test_strategy_stop_sits_on_its_level_after_entry_costs():
+    c = cfg()
+    c.costs.slippage_bps = 10                                   # fill 0.1% worse than the open
+    bars = day([FLAT, FLAT, FLAT])
+    t = Simulator(c, {"A": bars}, Levels({0: 1}, 0.5)).run().trades.iloc[0]
+    assert t.entry == pytest.approx(100.1) and t.stop == pytest.approx(99.5)
+    assert t.risk == pytest.approx(t.qty * 0.6)                 # R measured from the actual fill

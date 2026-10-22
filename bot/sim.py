@@ -67,6 +67,7 @@ class Simulator:
         frames = {s: strategy.compute(df) for s, df in bars.items() if df is not None and not df.empty}
         if not frames:
             raise ValueError("no price data to simulate")
+        self.frames = frames             # the strategy's per-symbol output, for reports and research
         self.index = pd.DatetimeIndex(sorted(set().union(*[f.index for f in frames.values()])))
         self.symbols = list(frames)
         n, m = len(self.index), len(self.symbols)
@@ -195,21 +196,23 @@ class Simulator:
                         sym = self.symbols[k]
                         inst = cfg.instrument(sym)
                         ref = o[k]
+                        fill = costs.market_fill(sym, sig, ref)
                         if np.isnan(stop_lvl):
                             stop_dist = _stop_dist(ref, atr_k, rk.stop)
                         else:
-                            stop_dist = (ref - stop_lvl) * sig
+                            # Measured from the fill, like the paper trader does from its quote, so
+                            # the stop sits exactly on the strategy's level (unless clamped).
+                            stop_dist = (fill - stop_lvl) * sig
                             if stop_dist <= 0:
                                 continue   # opened through the strategy's stop: setup already invalid
-                            stop_dist = clamp_stop(ref, stop_dist, rk.stop)
-                        if not np.isnan(tgt_lvl) and (tgt_lvl - ref) * sig <= 0:
+                            stop_dist = clamp_stop(fill, stop_dist, rk.stop)
+                        if not np.isnan(tgt_lvl) and (tgt_lvl - fill) * sig <= 0:
                             continue       # target already reached at the open
                         room = rm.risk_room(equity_prev) if rm is not None else math.inf
                         res = size_position(sym, sig, ref, stop_dist, equity_prev, open_list(i), rk, inst.group,
                                             inst.leverage, room, trades_today, costs.per_share_estimate(sym, ref))
                         if res.qty < 1:
                             continue
-                        fill = costs.market_fill(sym, sig, ref)
                         fee = costs.fees(res.qty, fill, is_sell=sig < 0)
                         cash -= sig * res.qty * fill + fee
                         if not np.isnan(tgt_lvl):
@@ -220,6 +223,8 @@ class Simulator:
                                             res.qty * stop_dist, fee, atr_k, fill, inst.group, inst.leverage,
                                             res.details["reserve_per_share"], abs(fill - ref) * res.qty + fee)
                         trades_today += 1
+                        if rm is not None:
+                            rm.record_trade(t)
                     pending = {}
 
                     # 2. stops and targets inside this candle (stop wins a tie)

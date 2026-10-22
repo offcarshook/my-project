@@ -69,11 +69,84 @@ def test_orb_mid_stop_and_no_look_ahead():
     assert full["or_high"].iloc[P:P + 3].isna().all()          # range unknown until it's complete
 
 
+def test_orb_skips_a_day_with_a_missing_range_candle():
+    day = orb_day()
+    gappy = day.drop(day.index[P])                              # today's 09:30 candle is missing
+    df = OpeningRangeBreakout(cfg()).compute(gappy)
+    assert (df["signal"].iloc[P:] == HOLD).all() and df["or_high"].iloc[P:].isna().all()
+    # the range is defined by the clock, not by "the first three candles"
+    late_open = day.drop(day.index[P + 1])                      # 09:35 missing
+    assert OpeningRangeBreakout(cfg()).compute(late_open)["or_high"].iloc[P:].isna().all()
+
+
 def test_orb_range_size_filter_and_last_entry():
     assert (OpeningRangeBreakout(cfg(orb={"max_range_pct": 0.5})).compute(orb_day())["signal"] == HOLD).all()
     late = OpeningRangeBreakout(cfg(orb={"last_entry": "10:00"})).compute(orb_day())
     assert late["signal"].iloc[P + 4] == BUY and late["signal"].iloc[P + 7] == HOLD
 
+
+
+def test_orb_buffer_needs_a_decisive_close():
+    assert OpeningRangeBreakout(cfg(orb={"buffer_atr": 0.25})).compute(orb_day())["signal"].iloc[P + 4] == BUY
+    big = OpeningRangeBreakout(cfg(orb={"buffer_atr": 3.0})).compute(orb_day())
+    assert (big["signal"].iloc[P:] != BUY).all()
+
+
+def test_orb_atr_stop_leaves_the_stop_to_risk_settings():
+    df = OpeningRangeBreakout(cfg(orb={"stop": "atr"})).compute(orb_day())
+    assert df["signal"].iloc[P + 4] == BUY and np.isnan(df["stop_dist"].iloc[P + 4])
+
+
+def retest_day():
+    rows = [(100.5, 101, 100, 100.5)] * 3 + [(100.6, 100.9, 100.4, 100.8)]
+    rows += [(100.8, 101.6, 100.7, 101.5)]                       # P+4 breakout close
+    rows += [(101.5, 101.6, 100.95, 101.3)]                      # P+5 back to 101 and holds -> entry
+    rows += [(101.3, 101.4, 101.1, 101.2)] * 20
+    return pd.concat([flat_day("2026-01-02"), bars(rows)])
+
+
+def test_orb_retest_entry_waits_for_the_pullback():
+    df = OpeningRangeBreakout(cfg(orb={"entry": "retest"})).compute(retest_day())
+    buys = df.index[df["signal"] == BUY]
+    assert list(buys) == [df.index[P + 5]]
+    assert df["stop_dist"].iloc[P + 5] == pytest.approx(101.3 - 100)
+    assert df["cross"].iloc[P + 4] == 1                          # the breakout still counts for exits
+    # a breakout that closes back inside the range is cancelled, not retested
+    failed = OpeningRangeBreakout(cfg(orb={"entry": "retest"})).compute(orb_day())
+    assert (failed["signal"].iloc[P:] != BUY).all()
+    # no look-ahead
+    part = OpeningRangeBreakout(cfg(orb={"entry": "retest"})).compute(retest_day().iloc[:P + 6])
+    pd.testing.assert_series_equal(df["signal"].iloc[:P + 6], part["signal"])
+
+
+def history(n_days=25, start=90.0, step=0.4):
+    """n_days of quiet sessions drifting by `step` a day, then the ORB day."""
+    dates = pd.bdate_range("2025-11-03", periods=n_days)
+    days = []
+    for j, d in enumerate(dates):
+        mid = start + step * j
+        days.append(flat_day(d.strftime("%Y-%m-%d"), lo=mid - 1, hi=mid + 1))
+    return days
+
+
+def test_orb_trend_filter_uses_prior_days_only():
+    rising = pd.concat(history() + [orb_day().iloc[P:]])
+    q = len(rising) - (len(orb_day()) - P)
+    df = OpeningRangeBreakout(cfg(orb={"trend": "own"})).compute(rising)
+    assert df["signal"].iloc[q + 4] == BUY and df["signal"].iloc[q + 7] == HOLD   # short blocked in an uptrend
+    falling = pd.concat(history(start=110.0, step=-0.4) + [rising.iloc[q:]])
+    df = OpeningRangeBreakout(cfg(orb={"trend": "own"})).compute(falling)
+    assert df["signal"].iloc[q + 4] == HOLD and df["signal"].iloc[q + 7] == SELL
+
+
+def test_orb_relative_volume_filter():
+    today = orb_day().iloc[P:].copy()
+    quiet = pd.concat(history() + [today])
+    q = len(quiet) - len(today)
+    assert (OpeningRangeBreakout(cfg(orb={"min_rvol": 1.5})).compute(quiet)["signal"].iloc[q:] == HOLD).all()
+    busy = quiet.copy()
+    busy.iloc[q + 4, busy.columns.get_loc("volume")] *= 3        # heavy volume on the breakout candle
+    assert OpeningRangeBreakout(cfg(orb={"min_rvol": 1.5})).compute(busy)["signal"].iloc[q + 4] == BUY
 
 # ---- VWAP mean reversion ------------------------------------------------------------
 def vwap_day():

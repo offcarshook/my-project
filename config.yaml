@@ -59,12 +59,17 @@ strategy:
     chop:        {enabled: false, period: 12, min_efficiency: 0.3}
   orb:
     minutes: 15            # opening range length
-    stop: range            # range = other side of the range | mid = its midpoint
+    stop: range            # range = other side of the range | mid = its midpoint | atr = risk.stop
     last_entry: "11:30"    # no breakout entries after this (New York)
     min_range_pct: 0.15    # skip ranges narrower than this % of price ...
     max_range_pct: 2.5     # ... or wider than this
     vwap_confirm: false    # longs only above VWAP, shorts only below
     max_trades_per_side: 1 # per symbol per day
+    buffer_atr: 0.0        # breakout close must clear the level by this many ATRs
+    min_rvol: 0.0          # breakout candle volume vs the same time slot's 20-session average (0 = off)
+    trend: "off"           # own = longs only above the symbol's 20-day average close, shorts only below
+    entry: close           # close = next open after the breakout close | retest = wait for a pullback
+    retest_bars: 6         # retest: candles allowed for price to come back and hold the level
   vwap:
     dev_atr: 2.0           # how far from VWAP (in ATRs) counts as stretched
     stop_buffer_atr: 0.5   # stop this many ATRs beyond the recent extreme
@@ -122,6 +127,8 @@ challenge:
   safety_buffer_pct: 1.0         # stop opening trades within this % (of starting balance) of a limit
   stop_at_target: true           # flatten and stop when the target is reached
   window_days: 30                # calendar days allowed (backtest challenge simulation)
+  min_trading_days: 0            # target only counts after trading on this many days (0 = no rule)
+  consistency_pct: 0             # 0 = off; else the best day may be at most this % of total profit
   # Set to true only after checking that your firm allows: ETFs, leveraged ETFs, shorting,
   # automated trading, and uses the drawdown rules above. Paper trading works either way.
   confirmed_firm_rules: false

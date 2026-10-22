@@ -96,6 +96,27 @@ def test_target_stops_trading():
     assert rm.state.status == PASSED and not rm.can_open()
 
 
+def test_target_waits_for_minimum_trading_days():
+    rm = RiskManager(rules(min_trading_days=2), 100_000)
+    rm.record_trade(ts("2026-01-05 10:00"))
+    rm.record_trade(ts("2026-01-05 11:00"))                     # same day counts once
+    assert rm.update(ts("2026-01-05 12:00"), 100_000, 108_500).action == OK and rm.state.status != PASSED
+    rm.record_trade(ts("2026-01-06 10:00"))
+    assert rm.update(ts("2026-01-06 10:05"), 108_500, 108_500).action == TARGET_HIT
+    assert RiskManager.from_dict(rm.rules, rm.to_dict()).state.trading_days == ["2026-01-05", "2026-01-06"]
+
+
+def test_consistency_rule_needs_profit_spread_over_days():
+    rm = RiskManager(rules(consistency_pct=50), 100_000)
+    rm.update(ts("2026-01-05 15:55"), 100_000, 100_000)
+    # +8% in one day: the best day is 100% of the profit -> not a pass yet, keep trading
+    assert rm.update(ts("2026-01-05 16:00"), 108_000, 108_000).action == OK
+    assert rm.update(ts("2026-01-06 10:00"), 108_000, 108_000).action == OK
+    assert rm.state.best_day_profit == pytest.approx(8_000)
+    assert rm.update(ts("2026-01-06 14:00"), 108_000, 112_000).action == OK      # 8k > 50% of 12k
+    assert rm.update(ts("2026-01-06 15:00"), 108_000, 116_000).action == TARGET_HIT   # 8k <= 50% of 16k
+
+
 def test_lock_persists_until_manual_reset_and_survives_reload():
     rm = RiskManager(rules(), 100_000)
     rm.update(ts("2026-01-05 10:00"), 100_000, 94_000)

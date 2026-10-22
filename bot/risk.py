@@ -35,6 +35,8 @@ class RiskState:
     reason: str = ""
     locked: bool = False
     buffered: bool = False
+    trading_days: list = field(default_factory=list)   # day keys with at least one entry
+    best_day_profit: float = 0.0                        # largest closed-day profit so far
 
 
 class RiskManager:
@@ -53,6 +55,8 @@ class RiskManager:
     def _roll_day(self, ts, balance: float, equity: float) -> None:
         key = self.day_key(ts)
         if key != self.state.day_key:
+            if self.state.day_start_balance is not None:   # the day that just ended (flat overnight)
+                self.state.best_day_profit = max(self.state.best_day_profit, balance - self.state.day_start_balance)
             self.state.day_key = key
             self.state.day_start_balance, self.state.day_start_equity = balance, equity
 
@@ -79,6 +83,26 @@ class RiskManager:
         """Money that can still be lost before hitting the safety buffer of the nearest limit."""
         buffer = self.state.initial * self.rules.safety_buffer_pct / 100
         return min(equity - self.daily_floor(), equity - self.total_floor()) - buffer
+
+    def record_trade(self, ts) -> None:
+        """Count today as a trading day (for challenge.min_trading_days)."""
+        key = self.day_key(ts)
+        if key not in self.state.trading_days:
+            self.state.trading_days.append(key)
+
+    def target_rules_met(self, exit_value: float) -> tuple[bool, str]:
+        """Firm rules on top of the profit target: minimum trading days and consistency (no single
+        day may be more than consistency_pct of the total profit). Until they're met, trading
+        simply continues."""
+        r, s = self.rules, self.state
+        if len(s.trading_days) < r.min_trading_days:
+            return False, f"{len(s.trading_days)}/{r.min_trading_days} trading days"
+        if r.consistency_pct > 0:
+            total = exit_value - s.initial
+            best = max(s.best_day_profit, exit_value - s.day_start_balance)
+            if best > total * r.consistency_pct / 100:
+                return False, f"best day {best:,.0f} is over {r.consistency_pct:g}% of the profit {total:,.0f}"
+        return True, ""
 
     def can_open(self) -> bool:
         s = self.state
@@ -117,7 +141,7 @@ class RiskManager:
         s.high_water = max(s.high_water or s.initial, peak)
 
         exit_value = equity if target_equity is None else min(target_equity, equity)
-        if exit_value >= self.target() and self.rules.stop_at_target:
+        if exit_value >= self.target() and self.rules.stop_at_target and self.target_rules_met(exit_value)[0]:
             s.status, s.reason = PASSED, f"profit target reached (equity after exit costs {exit_value:,.2f})"
             return RiskDecision(TARGET_HIT, s.reason, daily, total)
         # With stop_at_target false the target is only informational: keep trading normally.

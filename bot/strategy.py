@@ -181,31 +181,98 @@ class OpeningRangeBreakout(_Base):
     def compute(self, df: pd.DataFrame) -> pd.DataFrame:
         p = self.cfg.orb
         df = self._prepare(df)
-        day, n = session_info(df)
+        day, _ = session_info(df)
+        # The range is set by the clock (candles starting 09:30 up to 09:30 + minutes), and a day
+        # with any of those candles missing gets no range: counting "the first k candles" would
+        # silently shift the range later whenever the opening candle is missing from the data.
+        local = ny_index(df.index)
+        since_open = pd.Series(local.hour * 60 + local.minute - 570, index=df.index)
         k = max(int(p["minutes"]) // self.bar_minutes, 1)
-        in_range = n < k
-        df["or_high"] = df["high"].where(in_range).groupby(day).transform("max").where(n >= k)
-        df["or_low"] = df["low"].where(in_range).groupby(day).transform("min").where(n >= k)
+        in_range = (since_open >= 0) & (since_open < p["minutes"])
+        complete = in_range.groupby(day).transform("sum") == k
+        known = (since_open >= p["minutes"]) & complete
+        df["or_high"] = df["high"].where(in_range).groupby(day).transform("max").where(known)
+        df["or_low"] = df["low"].where(in_range).groupby(day).transform("min").where(known)
         df["vwap"] = session_vwap(df, day)
         c, prev_c = df["close"], df["close"].groupby(day).shift(1)
         width = (df["or_high"] - df["or_low"]) / c * 100
         sized = width.between(p["min_range_pct"], p["max_range_pct"])
-        up = (c > df["or_high"]) & (prev_c <= df["or_high"]) & sized
-        down = (c < df["or_low"]) & (prev_c >= df["or_low"]) & sized
+        buffer = p["buffer_atr"] * df["atr"]
+        up_level, down_level = df["or_high"] + buffer, df["or_low"] - buffer
+        up = (c > up_level) & (prev_c <= up_level) & sized
+        down = (c < down_level) & (prev_c >= down_level) & sized
         if p["vwap_confirm"]:
             up &= c > df["vwap"]
             down &= c < df["vwap"]
+        # an opposite breakout (raw, uncapped, before the entry-only filters) closes an open position
+        cross = np.where(up, 1, np.where(down, -1, 0))
+        if p["min_rvol"] > 0:
+            df["rvol"] = relative_volume(df)
+            busy = df["rvol"] >= p["min_rvol"]
+            up &= busy
+            down &= busy
+        if p["trend"] == "own":
+            df["daily_trend"] = daily_trend(df, day)
+            up &= df["daily_trend"] > 0
+            down &= df["daily_trend"] < 0
+        if p["entry"] == "retest":
+            up, down = _retests(df, day, up, down, int(p["retest_bars"]))
         ok_long, ok_short = filter_masks(df, self.cfg, self.bar_minutes, self.data_feed)
         win = self._window(df, end=p["last_entry"])
         cap = int(p["max_trades_per_side"])
         buy = per_day_cap(up & ok_long & win, day, cap)
         sell = per_day_cap(down & ok_short & win, day, cap)
-        anchor_long = df["or_low"] if p["stop"] == "range" else (df["or_high"] + df["or_low"]) / 2
-        anchor_short = df["or_high"] if p["stop"] == "range" else (df["or_high"] + df["or_low"]) / 2
-        stop = np.where(buy, c - anchor_long, np.where(sell, anchor_short - c, np.nan))
-        # an opposite breakout (raw, uncapped) closes an open position
-        cross = np.where(up, 1, np.where(down, -1, 0))
+        if p["stop"] == "atr":
+            stop = np.full(len(df), np.nan)              # risk.stop's ATR rule
+        else:
+            anchor_long = df["or_low"] if p["stop"] == "range" else (df["or_high"] + df["or_low"]) / 2
+            anchor_short = df["or_high"] if p["stop"] == "range" else (df["or_high"] + df["or_low"]) / 2
+            stop = np.where(buy, c - anchor_long, np.where(sell, anchor_short - c, np.nan))
         return _finish(df, buy, sell, stop_dist=stop, cross=cross)
+
+
+def relative_volume(df: pd.DataFrame, sessions: int = 20) -> pd.Series:
+    """Each candle's volume / the average volume of the same time slot over the prior sessions.
+    (Live, this is measured on the paper feed's volume, e.g. IEX, so compare like with like.)"""
+    slot = pd.Series(ny_index(df.index).strftime("%H:%M"), index=df.index)
+    prior = df["volume"].groupby(slot).transform(lambda v: v.shift(1).rolling(sessions, min_periods=10).mean())
+    return df["volume"] / prior
+
+
+def daily_trend(df: pd.DataFrame, day: pd.Series, length: int = 20) -> pd.Series:
+    """+1 / -1: was yesterday's close above / below its `length`-day average close (0 = unknown)."""
+    closes = df["close"].groupby(day).last()
+    sign = np.sign(closes - closes.rolling(length, min_periods=length * 3 // 4).mean()).shift(1)
+    return day.map(sign).fillna(0)
+
+
+def _retests(df: pd.DataFrame, day: pd.Series, up: pd.Series, down: pd.Series, bars: int):
+    """Turn breakouts into retest entries: after a breakout close, wait up to `bars` candles for
+    one that trades back to the range level and closes beyond it again. A close back inside the
+    range cancels the setup; breakouts that never retest are simply missed."""
+    hi_lvl, lo_lvl = df["or_high"].to_numpy(), df["or_low"].to_numpy()
+    h, lo, c = (df[k].to_numpy() for k in ("high", "low", "close"))
+    u, d, days = up.to_numpy(), down.to_numpy(), day.to_numpy()
+    out_up, out_down = np.zeros(len(df), bool), np.zeros(len(df), bool)
+    long_until = short_until = -1
+    for i in range(len(df)):
+        if i and days[i] != days[i - 1]:
+            long_until = short_until = -1
+        if i <= long_until:
+            if c[i] <= hi_lvl[i]:
+                long_until = -1                          # failed: back inside the range
+            elif lo[i] <= hi_lvl[i]:
+                out_up[i], long_until = True, -1         # touched the level and held it
+        if i <= short_until:
+            if c[i] >= lo_lvl[i]:
+                short_until = -1
+            elif h[i] >= lo_lvl[i]:
+                out_down[i], short_until = True, -1
+        if u[i]:
+            long_until = i + bars
+        if d[i]:
+            short_until = i + bars
+    return pd.Series(out_up, index=df.index), pd.Series(out_down, index=df.index)
 
 
 # ---------------------------------------------------------------------------

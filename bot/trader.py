@@ -512,6 +512,7 @@ class Trader:
         self.save()
         try:
             resp = self.broker.submit_order(**order)
+            self.risk.record_trade(ts)
             self.event("order_submitted", symbol=sym, client_order_id=cid, qty=qty, side=order["side"], stop=stop,
                        target=target, order_id=(resp or {}).get("id"))
         except ApiError as exc:

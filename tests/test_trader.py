@@ -476,3 +476,10 @@ def test_strategy_stop_and_target_levels_go_on_the_bracket(tmp_path):
     o = broker.orders_list[0]
     assert float(o["stop_loss"]["stop_price"]) == pytest.approx(round(close - 2.0, 2))
     assert float(o["take_profit"]["limit_price"]) == pytest.approx(round(close + 3.0, 2))
+
+
+def test_entries_count_as_trading_days(tmp_path):
+    when = first_buy_time(make_cfg(tmp_path))
+    t, broker = trader_at(tmp_path, when)
+    t.step()
+    assert t.risk.state.trading_days == [pd.Timestamp(when).tz_convert(NY).date().isoformat()]

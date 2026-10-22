@@ -167,3 +167,53 @@ def test_trailing_stop_locks_in_profit():
     bars = day([FLAT, FLAT, (100, 101.6, 100, 101.5), (101.5, 101.6, 100.5, 100.8)])
     t = Simulator(c, {"A": bars}, Given({0: 1})).run().trades.iloc[0]
     assert t.reason == "stop loss" and t.exit == pytest.approx(101.1) and t.pnl > 0
+
+
+# ---- review fixes -----------------------------------------------------------
+class BySymbol:
+    """Strategy stub with per-symbol signals, keyed by each frame's 'sym' column."""
+    warmup = 0
+
+    def __init__(self, per):
+        self.per = per
+
+    def compute(self, df):
+        return Given(self.per.get(df["sym"].iloc[0], {})).compute(df)
+
+
+def test_sizing_at_open_ignores_the_same_candles_close():
+    c = cfg(max_gross_exposure=1.5, max_per_group=5)
+    sizes = []
+    for close in (100, 104):
+        a = day([FLAT, FLAT, (100, max(close, 100.2), 99.9, close), FLAT, FLAT]).assign(sym="A")
+        b = day([FLAT] * 5).assign(sym="B")
+        res = Simulator(c, {"A": a, "B": b}, BySymbol({"A": {0: 1}, "B": {1: 1}})).run()
+        sizes.append(res.trades.set_index("symbol").loc["B", "qty"])
+    assert sizes[0] == sizes[1]
+
+
+def test_early_close_from_calendar_flattens_ten_minutes_before():
+    bars = day([FLAT] * 6, date="2025-11-28", start="12:30")          # 12:30-12:55
+    res = Simulator(cfg(), {"A": bars}, Given({0: 1}), sessions={"2025-11-28": ("09:30", "13:00")}).run()
+    t = res.trades.iloc[0]
+    assert t.reason == "end of day"
+    assert pd.Timestamp(t.exit_ts).tz_convert("America/New_York").strftime("%H:%M") == "12:50"
+
+
+def test_target_needs_to_survive_exit_costs():
+    c = cfg(risk_per_trade_pct=1.0)
+    c.risk.reward_risk = 0
+    c.costs.default_spread_bps, c.costs.slippage_bps = 20, 10     # expensive exits
+    # the close marks equity just over +8%, but closing would cost more than the margin
+    bars = day([FLAT, FLAT, (100, 108.5, 100, 108.4), FLAT])
+    res = Simulator(c, {"A": bars}, Given({0: 1})).run(challenge=True)
+    assert res.status in ("ACTIVE", "PASSED")
+    if res.status == "PASSED":
+        assert res.equity["balance"].iloc[-1] >= 108_000
+
+
+def test_trades_record_costs():
+    c = cfg()
+    c.costs.default_spread_bps, c.costs.slippage_bps = 2, 1
+    t = Simulator(c, {"A": day([FLAT, FLAT, (100, 102.5, 99.95, 102)])}, Given({0: 1})).run().trades.iloc[0]
+    assert t.costs > 0 and t.costs >= t.fees   # spread + slippage on both sides (fees are 0 in this fixture)

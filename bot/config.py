@@ -82,9 +82,13 @@ class RiskSettings:
     trailing: TrailingConfig = field(default_factory=TrailingConfig)
     max_positions: int = 3
     max_per_group: int = 2
-    max_gross_exposure: float = 3.0
-    max_trades_per_day: int = 20
-    sizing_buffer_pct: float = 0.05
+    max_gross_exposure: float = 4.0
+    max_trades_per_day: int = 15
+    sizing_buffer_pct: float = 0.02
+
+
+TF_MINUTES = {"1Min": 1, "5Min": 5, "15Min": 15, "30Min": 30, "1Hour": 60, "1Day": 390}
+FEEDS = ("iex", "sip")
 
 
 # Challenge rules have no defaults on purpose: firms differ, so every value must be set.
@@ -122,7 +126,7 @@ class CostSettings:
 
 @dataclass
 class BacktestSettings:
-    data_feed: str = "sip"
+    data_feed: str = "iex"
     cache_dir: str = "data/cache"
     starting_cash: float = 25_000
     train: list = field(default_factory=lambda: ["2023-01-01", "2024-06-30"])
@@ -130,8 +134,13 @@ class BacktestSettings:
     test: list = field(default_factory=lambda: ["2025-04-01", "2026-09-30"])
     challenge_every_n_days: int = 5
     monte_carlo_runs: int = 5000
-    min_trades_per_day: float = 2
+    min_trades_per_day: float = 4
+    max_trades_per_day: float = 15
     regime_symbol: str = "QQQ"
+    risk_grid: list = field(default_factory=lambda: [0.25, 0.375, 0.5, 0.75])
+    sweep_max_gross_exposure: float = 4.0
+    max_fail_pct: float = 10.0
+    min_edge_margin_pct: float = 10.0
 
 
 @dataclass
@@ -156,6 +165,8 @@ class BotConfig:
     paper: PaperSettings
 
     def instrument(self, symbol: str) -> Instrument:
+        # parse_config guarantees every watchlist symbol is configured; this fallback only
+        # covers ad-hoc symbols (e.g. tests) and treats them as their own 1x group.
         return self.instruments.get(symbol, Instrument(group=symbol))
 
     def spread_bps(self, symbol: str) -> float:
@@ -199,9 +210,19 @@ def parse_config(raw: dict) -> BotConfig:
     for name, values in (s_raw.pop("filters", None) or {}).items():
         if not hasattr(filters, name):
             raise ConfigError(f"Unknown filter: strategy.filters.{name}")
-        setattr(filters, name, {**getattr(filters, name), **(values or {})})
+        values = values or {}
+        if not isinstance(values, dict):
+            raise ConfigError(f"strategy.filters.{name} must be a mapping")
+        unknown = set(values) - set(getattr(filters, name))
+        if unknown:
+            raise ConfigError(f"Unknown setting(s) in strategy.filters.{name}: {', '.join(sorted(unknown))}")
+        setattr(filters, name, {**getattr(filters, name), **values})
     strategy = _build(StrategyConfig, s_raw, "strategy")
     strategy.filters = filters
+    if strategy.timeframe not in TF_MINUTES or strategy.timeframe == "1Day":
+        raise ConfigError(f"strategy.timeframe must be an intraday Alpaca timeframe "
+                          f"({', '.join(t for t in TF_MINUTES if t != '1Day')}), got {strategy.timeframe!r}")
+    _check_filters(filters, TF_MINUTES[strategy.timeframe])
     for key in ("entry_start", "entry_end", "flatten_at"):
         setattr(strategy, key, _time(getattr(strategy, key), f"strategy.{key}"))
     if not 1 < strategy.fast < strategy.slow:
@@ -222,6 +243,20 @@ def parse_config(raw: dict) -> BotConfig:
         raise ConfigError("need 0 < risk.stop.min_pct <= risk.stop.max_pct")
     if risk.max_positions < 1 or risk.max_per_group < 1:
         raise ConfigError("risk.max_positions and risk.max_per_group must be >= 1")
+    checks = [
+        (stop.atr_mult > 0, "risk.stop.atr_mult must be > 0"),
+        (0 < stop.fixed_pct <= 5, "risk.stop.fixed_pct must be in (0, 5]"),
+        (stop.max_pct <= 5, "risk.stop.max_pct must be <= 5"),
+        (risk.reward_risk >= 0, "risk.reward_risk can't be negative"),
+        (risk.sizing_buffer_pct >= 0, "risk.sizing_buffer_pct can't be negative"),
+        (risk.max_gross_exposure > 0, "risk.max_gross_exposure must be > 0"),
+        (risk.max_trades_per_day >= 1, "risk.max_trades_per_day must be >= 1"),
+        (trailing.atr_mult > 0, "risk.trailing.atr_mult must be > 0"),
+        (trailing.activate_r >= 0, "risk.trailing.activate_r can't be negative"),
+    ]
+    for ok, message in checks:
+        if not ok:
+            raise ConfigError(message)
 
     c_raw = raw.get("challenge")
     if not c_raw:
@@ -242,10 +277,66 @@ def parse_config(raw: dict) -> BotConfig:
     if challenge.safety_buffer_pct < 0:
         raise ConfigError("challenge.safety_buffer_pct can't be negative")
 
-    return BotConfig(watchlist, instruments, strategy, risk, challenge,
-                     _build(CostSettings, raw.get("costs"), "costs"),
-                     _build(BacktestSettings, raw.get("backtest"), "backtest"),
-                     _build(PaperSettings, raw.get("paper"), "paper"))
+    missing = [s for s in watchlist if s not in instruments]
+    if missing:
+        raise ConfigError(f"watchlist symbol(s) missing from instruments (set group and leverage): {', '.join(missing)}")
+
+    costs = _build(CostSettings, raw.get("costs"), "costs")
+    if min(costs.slippage_bps, costs.default_spread_bps, costs.commission_per_share, costs.sec_fee_rate,
+           costs.taf_per_share) < 0:
+        raise ConfigError("costs can't be negative")
+    backtest = _build(BacktestSettings, raw.get("backtest"), "backtest")
+    paper = _build(PaperSettings, raw.get("paper"), "paper")
+    for section in (backtest, paper):
+        section.data_feed = str(section.data_feed).lower()
+        if section.data_feed not in FEEDS:
+            raise ConfigError(f"data_feed must be one of {FEEDS}, got {section.data_feed!r}")
+    _check_periods(backtest)
+    if not 0 < backtest.min_trades_per_day <= backtest.max_trades_per_day:
+        raise ConfigError("need 0 < backtest.min_trades_per_day <= backtest.max_trades_per_day")
+    if not backtest.risk_grid or not all(0 < r <= 1 for r in backtest.risk_grid):
+        raise ConfigError("backtest.risk_grid must list risk levels in (0, 1]")
+    return BotConfig(watchlist, instruments, strategy, risk, challenge, costs, backtest, paper)
+
+
+def _check_filters(f: FilterConfig, bar_minutes: int) -> None:
+    for name in ("htf_trend", "atr_band", "liquidity", "chop"):
+        if not isinstance(getattr(f, name)["enabled"], bool):
+            raise ConfigError(f"strategy.filters.{name}.enabled must be true or false")
+    h, a, li, c = f.htf_trend, f.atr_band, f.liquidity, f.chop
+    checks = [
+        (h["minutes"] > 0 and h["minutes"] % bar_minutes == 0,
+         f"htf_trend.minutes must be a positive multiple of the {bar_minutes}-minute candle"),
+        (h["ema"] >= 2, "htf_trend.ema must be >= 2"),
+        (a["period"] >= 2, "atr_band.period must be >= 2"),
+        (a["lookback_bars"] >= a["period"], "atr_band.lookback_bars must be >= atr_band.period"),
+        (0 < a["min_ratio"] < a["max_ratio"], "need 0 < atr_band.min_ratio < atr_band.max_ratio"),
+        (li["max_spread_bps"] > 0, "liquidity.max_spread_bps must be > 0"),
+        (li["min_dollar_volume_sip"] >= 0 and li["min_dollar_volume_iex"] >= 0, "liquidity volume floors can't be negative"),
+        (c["period"] >= 2, "chop.period must be >= 2"),
+        (0 <= c["min_efficiency"] <= 1, "chop.min_efficiency must be between 0 and 1"),
+    ]
+    for ok, message in checks:
+        if not ok:
+            raise ConfigError(f"strategy.filters.{message}")
+
+
+def _check_periods(b: BacktestSettings) -> None:
+    """Train, validation and test must be chronological, non-overlapping and in the past,
+    otherwise the 'untouched test period' claim doesn't hold."""
+    from datetime import date
+
+    try:
+        dates = [date.fromisoformat(str(d)) for p in (b.train, b.validation, b.test) for d in p]
+    except (TypeError, ValueError):
+        raise ConfigError("backtest train/validation/test must each be [YYYY-MM-DD, YYYY-MM-DD]") from None
+    if len(dates) != 6:
+        raise ConfigError("backtest train/validation/test must each be [start, end]")
+    tr0, tr1, va0, va1, te0, te1 = dates
+    if not (tr0 <= tr1 < va0 <= va1 < te0 <= te1):
+        raise ConfigError("backtest periods must be in order and not overlap: train < validation < test")
+    if te1 >= date.today():
+        raise ConfigError("backtest.test must end before today")
 
 
 def load_config(path: str = "config.yaml") -> BotConfig:

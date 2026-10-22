@@ -72,14 +72,16 @@ class AlpacaPaperBroker:
     def cancel_order(self, order_id: str) -> None:
         self._req("DELETE", f"/v2/orders/{order_id}")
 
-    def cancel_all(self) -> None:
-        self._req("DELETE", "/v2/orders")
+    def cancel_all(self) -> list[dict]:
+        return self._req("DELETE", "/v2/orders") or []
 
     def close_position(self, symbol: str) -> dict:
         return self._req("DELETE", f"/v2/positions/{symbol}")
 
-    def close_all(self) -> None:
-        self._req("DELETE", "/v2/positions", params={"cancel_orders": "true"})
+    def close_all(self) -> list[dict]:
+        """Close every position (cancelling their orders). Alpaca answers 207 Multi-Status with one
+        {symbol, status, body} item per position, and some can fail while others succeed."""
+        return self._req("DELETE", "/v2/positions", params={"cancel_orders": "true"}) or []
 
     # ---- market data --------------------------------------------------------
     def bars(self, symbols: list[str], start, timeframe: str) -> dict[str, pd.DataFrame]:

@@ -172,3 +172,52 @@ def test_cost_model_fills_and_fees():
     assert cm.fees(1_000_000, 1.0, is_sell=True) == pytest.approx(27.8 + 8.30)  # TAF capped
     assert not cm.limit_touched("QQQ", -1, 101.0, high=101.005, low=100)     # touched, not traded through
     assert cm.limit_touched("QQQ", -1, 101.0, high=101.02, low=100)
+
+
+# ---- review fixes -----------------------------------------------------------
+def test_target_judged_after_exit_costs_and_confirmed_on_balance():
+    rm = RiskManager(rules(), 100_000)
+    # marked at 108,010 but worth 107,985 after exit costs: not a pass yet
+    assert rm.update(ts("2026-01-05 10:00"), 100_000, 108_010, target_equity=107_985).action == OK
+    assert rm.update(ts("2026-01-05 10:05"), 100_000, 108_100, target_equity=108_020).action == TARGET_HIT
+    assert rm.state.status == PASSED
+    # exit fills slipped below the target after all: back to ACTIVE instead of stuck
+    assert rm.confirm_target(107_990) is False and rm.state.status == "ACTIVE" and rm.can_open()
+
+
+def test_stop_at_target_false_keeps_trading():
+    rm = RiskManager(rules(stop_at_target=False), 100_000)
+    assert rm.update(ts("2026-01-05 10:00"), 100_000, 109_000).action == OK
+    assert rm.can_open()
+
+
+def test_trailing_high_water_uses_intrabar_peak():
+    rm = RiskManager(rules(drawdown_type="trailing", trailing_lock_at_initial=False, max_total_loss_pct=1,
+                           max_daily_loss_pct=50, profit_target_pct=50), 100_000)
+    rm.update(ts("2026-01-05 10:00"), 100_000, 100_094, best_equity=101_172)
+    assert rm.total_floor() == pytest.approx(100_172)
+    assert rm.update(ts("2026-01-05 10:05"), 100_000, 100_200, worst_equity=99_918).action == FLATTEN_LOCK
+
+
+def test_open_risk_includes_reserve():
+    p = OpenPosition("SPY", 100, 500, 498, 500, "broad", 1, reserve_per_share=0.5)
+    assert open_risk([p]) == 250
+    r = size(positions=[p], risk_room=400)
+    assert r.qty == 120 and r.details["reserve_per_share"] == pytest.approx(0.25)  # $150 room / ($1 stop + $0.25 buffer)
+
+
+def test_usage_reflects_rule_options():
+    rm = RiskManager(rules(daily_loss_base="day_start", day_start_reference="equity",
+                           drawdown_type="trailing", trailing_lock_at_initial=False), 100_000)
+    rm.update(ts("2026-01-05 10:00"), 100_000, 106_000)
+    rm.update(ts("2026-01-06 09:31"), 101_000, 101_000)
+    u = rm.usage(101_000)
+    assert u["total_used_pct_of_limit"] == pytest.approx(50)    # gave back 5k of the 10k trailing room
+    rm.update(ts("2026-01-06 10:00"), 101_000, 97_000)
+    assert rm.usage(97_000)["daily_used_pct_of_limit"] == pytest.approx(4_000 / (101_000 * 0.05) * 100)
+
+
+def test_one_cent_spread_floor_for_cheap_etfs():
+    cm = CostModel(CostSettings(slippage_bps=0), lambda s: 3.0)
+    assert cm.market_fill("SQQQ", 1, 9.0) == pytest.approx(9.005)     # half a cent, not 0.135 cents
+    assert cm.market_fill("QQQ", 1, 500.0) == pytest.approx(500.075)  # 1.5 bps dominates

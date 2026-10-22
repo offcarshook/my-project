@@ -84,14 +84,16 @@ class FakeBroker:
         pass
 
     def cancel_all(self):
-        pass
+        return []
 
     def close_position(self, sym):
         self.pos.pop(sym, None)
 
     def close_all(self):
         self.closed_all += 1
+        out = [{"symbol": s, "status": 200} for s in self.pos]
         self.pos = {}
+        return out
 
     def bars(self, symbols, start, timeframe):
         return {s: BARS[BARS.index <= self.now] for s in symbols}
@@ -214,8 +216,10 @@ def test_reconcile_closes_unknown_and_detects_closed_positions(tmp_path):
     t, broker = trader_at(tmp_path, pd.Timestamp("2026-01-05 10:00", tz=NY))
     broker.pos = {"SPY": 5}                                   # not ours
     t.state["positions"]["QQQ"] = {"qty": 10, "entry": 394, "stop": 390, "status": "open"}  # gone at broker
-    t.reconcile(broker.positions())
-    assert "SPY" not in broker.pos and "QQQ" not in t.state["positions"]
+    unknown = t.reconcile(broker.positions())
+    assert unknown == ["SPY"] and "QQQ" not in t.state["positions"]
+    t._close_unknown(unknown)
+    assert "SPY" not in broker.pos
     kinds = [e["type"] for e in events(tmp_path)]
     assert "reconcile_unknown_position" in kinds and "exit_detected" in kinds
 
@@ -257,3 +261,192 @@ def test_trailing_stop_moves_the_stop_leg_up(tmp_path):
     t.step()
     assert broker.replaced and broker.replaced[0][0] == "stop1"
     assert broker.replaced[0][1]["stop_price"] > 390.0 and t.state["positions"]["QQQ"]["stop"] > 390.0
+
+
+
+# ---- review fixes -----------------------------------------------------------
+class AlpacaLike(FakeBroker):
+    """Closer to real Alpaca: bracket legs are nested under the parent (nested=true), a position
+    can't be closed while its legs hold the shares, and cancels take effect."""
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.open_legs = {}   # symbol -> list of leg dicts
+
+    def submit_order(self, **o):
+        rec = super().submit_order(**o)
+        legs = [{"id": f"{rec['id']}-sl", "symbol": o["symbol"], "type": "stop", "status": "new"}]
+        if "take_profit" in o:
+            legs.append({"id": f"{rec['id']}-tp", "symbol": o["symbol"], "type": "limit", "status": "new"})
+        rec["legs"] = legs
+        self.open_legs[o["symbol"]] = legs
+        return rec
+
+    def orders(self, status="all", after=None, limit=500):
+        if status == "open":
+            return [o for o in self.orders_list if any(l["status"] == "new" for l in o.get("legs", []))]
+        return list(self.orders_list)
+
+    def cancel_order(self, oid):
+        for o in self.orders_list:
+            if o["id"] == oid:
+                raise ApiError(422, "order is not cancelable (filled)")
+            for leg in o.get("legs", []):
+                if leg["id"] == oid:
+                    leg["status"] = "canceled"
+
+    def close_position(self, sym):
+        if any(l["status"] == "new" for l in self.open_legs.get(sym, [])):
+            raise ApiError(403, "insufficient qty available for order")
+        super().close_position(sym)
+
+
+def test_opposite_exit_cancels_nested_legs_then_closes(tmp_path):
+    cfg = make_cfg(tmp_path)
+    t, broker = trader_at(tmp_path, first_buy_time(cfg), broker=AlpacaLike(), cfg=cfg)
+    t.step()
+    assert broker.pos.get("QQQ")
+    assert t._exit("QQQ", "opposite signal") is True
+    assert "QQQ" not in broker.pos and all(l["status"] == "canceled" for l in broker.open_legs["QQQ"])
+
+
+def test_failed_exit_is_retried_next_poll(tmp_path):
+    class Stubborn(AlpacaLike):
+        fails = 1
+
+        def close_position(self, sym):
+            if self.fails:
+                self.fails -= 1
+                raise ApiError(403, "trade denied")
+            FakeBroker.close_position(self, sym)
+    cfg = make_cfg(tmp_path)
+    when = first_buy_time(cfg)
+    t, broker = trader_at(tmp_path, when, broker=Stubborn(), cfg=cfg)
+    t.step()
+    assert t._exit("QQQ", "opposite signal") is False
+    assert t.state["positions"]["QQQ"]["status"] == "pending_exit"
+    t.local_now = lambda: (when + pd.Timedelta(minutes=1)).to_pydatetime()
+    t.step()
+    assert "QQQ" not in broker.pos and "QQQ" not in t.state["positions"]
+
+
+def test_unknown_position_close_failure_does_not_block_risk_or_cutoff(tmp_path):
+    class Refuses(FakeBroker):
+        def close_position(self, sym):
+            raise ApiError(403, "insufficient qty available for order")
+    broker = Refuses()
+    broker.pos = {"SPY": 5}                                   # not ours, and can't be closed
+    t, _ = trader_at(tmp_path, pd.Timestamp("2026-01-05 11:00", tz=NY), broker=broker)
+    assert t.step() in ("ok", "broker_error")                  # logged, not raised
+    assert any(e["type"] == "error" and "close unknown" in e.get("where", "") for e in events(tmp_path))
+    broker.equity = 94_000                                     # a breach on the next poll is still caught
+    assert t.step() == "locked" and broker.closed_all == 1
+
+
+def test_ambiguous_submit_keeps_the_record_and_never_liquidates(tmp_path):
+    class LostResponse(FakeBroker):
+        def submit_order(self, **o):
+            super().submit_order(**o)
+            raise ApiError(503, "service unavailable")
+    cfg = make_cfg(tmp_path)
+    when = first_buy_time(cfg)
+    t, broker = trader_at(tmp_path, when, broker=LostResponse(), cfg=cfg)
+    t.step()
+    assert t.state["positions"]["QQQ"]["status"] in ("pending", "open") and t.state["trades_today"] == 1
+    t.local_now = lambda: (when + pd.Timedelta(minutes=1)).to_pydatetime()
+    t.step()
+    assert broker.pos.get("QQQ") and t.state["positions"]["QQQ"]["status"] == "open"   # adopted, not closed
+    assert not any(e["type"] == "reconcile_unknown_position" for e in events(tmp_path))
+
+
+def test_partial_flatten_failure_is_retried_until_flat(tmp_path):
+    class PartlyRefused(FakeBroker):
+        refuse = 1
+
+        def close_all(self):
+            self.closed_all += 1
+            if self.refuse:
+                self.refuse -= 1
+                self.pos = {"SOXL": self.pos.get("SOXL", 300)}
+                return [{"symbol": "QQQ", "status": 200}, {"symbol": "SOXL", "status": 403, "body": {"message": "pdt"}}]
+            self.pos = {}
+            return [{"symbol": "SOXL", "status": 200}]
+    broker = PartlyRefused()
+    broker.pos = {"QQQ": 10, "SOXL": 300}
+    t, _ = trader_at(tmp_path, pd.Timestamp("2026-01-05 15:51", tz=NY), broker=broker)
+    t.state["positions"] = {"QQQ": {"qty": 10, "entry": 394, "stop": 390, "status": "open"},
+                            "SOXL": {"qty": 300, "entry": 30, "stop": 29, "status": "open"}}
+    t.step()
+    assert "SOXL" in t.state["positions"] and "NOT FLAT" in json.loads((tmp_path / "state" / "status.json").read_text())["note"]
+    t.step()
+    assert broker.pos == {} and t.state["positions"] == {} and broker.closed_all == 2
+
+
+def test_broker_clock_drives_the_cutoff_and_closed_market_alarm(tmp_path):
+    broker = FakeBroker()
+    broker.pos = {"QQQ": 10}
+    t, _ = trader_at(tmp_path, pd.Timestamp("2026-01-05 15:40", tz=NY), broker=broker)   # local clock slow
+    t.state["positions"]["QQQ"] = {"qty": 10, "entry": 394, "stop": 390, "status": "open"}
+    clock = broker.clock
+
+    def broker_clock():
+        return {**clock(), "timestamp": "2026-01-05T15:52:00-05:00"}
+    broker.clock = broker_clock
+    assert t.step() == "after_cutoff" and broker.pos == {}
+    broker.pos = {"QQQ": 10}
+    broker.open = False
+    assert t.step() == "closed"
+    assert any(e["type"] == "overnight_positions" for e in events(tmp_path))
+
+
+def test_bracket_legs_are_gtc(tmp_path):
+    t, broker = trader_at(tmp_path, first_buy_time(make_cfg(tmp_path)))
+    t.step()
+    assert broker.orders_list[0]["time_in_force"] == "gtc"
+
+
+def test_trailing_ignores_the_signal_candle_wick(tmp_path):
+    cfg = make_cfg(tmp_path)
+    cfg.risk.trailing.enabled = True
+
+    class WithStopLeg(FakeBroker):
+        replaced = []
+
+        def orders(self, status="all", after=None, limit=500):
+            return [{"id": "p", "symbol": "QQQ", "status": "filled",
+                     "legs": [{"id": "sl", "symbol": "QQQ", "type": "stop", "status": "new"}]}] if status == "open" else []
+
+        def replace_order(self, oid, **changes):
+            self.replaced.append(changes)
+    broker = WithStopLeg()
+    broker.pos = {"QQQ": 100}
+    when = pd.Timestamp("2026-01-05 13:41", tz=NY)
+    t, _ = trader_at(tmp_path, when, broker=broker, cfg=cfg)
+    last_bar = BARS[BARS.index + pd.Timedelta(minutes=5) <= when].index[-1]
+    # entered at the open right after the last completed candle: nothing after entry yet
+    t.state["positions"]["QQQ"] = {"qty": 100, "entry": 397.0, "stop": 396.5, "risk": 50.0, "status": "open",
+                                   "opened": (last_bar + pd.Timedelta(minutes=5)).isoformat()}
+    t.step()
+    assert broker.replaced == []
+
+
+def test_sleep_is_interruptible(tmp_path):
+    import threading
+    t, _ = trader_at(tmp_path, first_buy_time(make_cfg(tmp_path)))
+    threading.Timer(0.1, t._wake.set).start()
+    import time as _time
+    start = _time.time()
+    t._wake.wait(5)
+    assert _time.time() - start < 1
+
+
+def test_status_uses_trailing_floor(tmp_path):
+    cfg = make_cfg(tmp_path)
+    cfg.challenge.drawdown_type, cfg.challenge.trailing_lock_at_initial = "trailing", False
+    broker = FakeBroker(equity=106_000)
+    t, _ = trader_at(tmp_path, pd.Timestamp("2026-01-05 10:00", tz=NY), broker=broker, cfg=cfg)
+    t.risk.reset(100_000)
+    t.step()
+    broker.equity = 101_000
+    t.step()
+    st = json.loads((tmp_path / "state" / "status.json").read_text())
+    assert st["total_limit_used_pct_of_limit"] == pytest.approx(50)

@@ -6,7 +6,7 @@
     python propbot.py paper               # run the paper-trading bot (Ctrl+C stops it safely)
     python propbot.py stop                # EMERGENCY STOP: cancel orders, close positions, lock
     python propbot.py status              # print the running bot's latest status
-    python propbot.py reset --yes         # clear a lock and start a fresh challenge
+    python propbot.py reset --yes         # clear a lock and start a fresh challenge (stop the bot first)
 """
 import argparse
 import json
@@ -28,12 +28,13 @@ def setup_logging(log_dir: str):
 
 
 def cmd_backtest(cfg, args):
-    from bot.data import AlpacaData, DemoData, load_bars
+    from bot.data import AlpacaData, DemoData, load_bars, load_sessions
     from bot.http import ApiError
     from bot.pipeline import run_pipeline
 
     start = pd.Timestamp(cfg.backtest.train[0]) - pd.Timedelta(days=14)   # indicator warm-up
     end = pd.Timestamp(cfg.backtest.test[1])
+    sessions = None
     if args.synthetic:
         print("⚠️  SYNTHETIC random-walk data: this only checks that the pipeline runs. The numbers mean nothing.")
         bars = DemoData().get_history(cfg.watchlist, start.tz_localize("America/New_York"), cfg.strategy.timeframe)
@@ -44,9 +45,15 @@ def cmd_backtest(cfg, args):
                      "or run with --synthetic for a pipeline check.")
         print(f"Loading {cfg.strategy.timeframe} candles {start.date()} → {end.date()} "
               f"({cfg.backtest.data_feed} feed, cached in {cfg.backtest.cache_dir})")
+        data = AlpacaData(settings)
         try:
-            bars = load_bars(AlpacaData(settings), cfg.watchlist, start, end, cfg.strategy.timeframe,
-                             cfg.backtest.data_feed, cfg.backtest.cache_dir)
+            sessions = load_sessions(data, start, end, cfg.backtest.cache_dir)
+        except ApiError as exc:
+            sessions = None
+            print(f"⚠️  Couldn't load the exchange calendar ({exc}); early-close days won't be trimmed.")
+        try:
+            bars = load_bars(data, cfg.watchlist, start, end, cfg.strategy.timeframe,
+                             cfg.backtest.data_feed, cfg.backtest.cache_dir, sessions=sessions)
         except ApiError as exc:
             if exc.status in (401, 403):
                 sys.exit(f"Alpaca refused the data request ({exc}). Check your keys; if your plan can't read "
@@ -56,7 +63,7 @@ def cmd_backtest(cfg, args):
         if empty:
             print(f"No data for: {', '.join(empty)} (left out)")
             bars = {s: df for s, df in bars.items() if not df.empty}
-    out = run_pipeline(cfg, bars, out_dir=args.out, synthetic=args.synthetic)
+    out = run_pipeline(cfg, bars, out_dir=args.out, synthetic=args.synthetic, sessions=sessions)
     print(f"\nReport: {out / 'report.md'}")
 
 
@@ -125,24 +132,32 @@ def cmd_status(cfg, args):
 
 def cmd_reset(cfg, args):
     from bot.risk import RiskManager
+    from bot.trader import bot_running
 
     if not args.yes:
         sys.exit("This clears the lock and starts a new challenge. Re-run with --yes to confirm.")
+    if bot_running(cfg):
+        sys.exit("The paper bot is still running and would overwrite the reset. Stop it first "
+                 "(Ctrl+C, or `python propbot.py stop`), then reset.")
     state_dir = Path(cfg.paper.state_dir)
-    (state_dir / "KILL").unlink(missing_ok=True)
     path = state_dir / "trader_state.json"
+    equity = args.initial
+    if equity is None and Settings().has_alpaca_keys:
+        from bot.broker import AlpacaPaperBroker
+        equity = float(AlpacaPaperBroker(Settings(), cfg.paper.data_feed).account()["equity"])
+    if equity is None:
+        sys.exit("No API keys here to read the account equity: pass the new starting balance with --initial.")
+    (state_dir / "KILL").unlink(missing_ok=True)
     if not path.exists():
         print("Nothing to reset.")
         return
     state = json.loads(path.read_text())
-    equity = None
-    if Settings().has_alpaca_keys:
-        from bot.broker import AlpacaPaperBroker
-        equity = float(AlpacaPaperBroker(Settings(), cfg.paper.data_feed).account()["equity"])
-    rm = RiskManager.from_dict(cfg.challenge, state["risk"]) if state.get("risk") else RiskManager(cfg.challenge, equity or 0)
+    rm = RiskManager.from_dict(cfg.challenge, state["risk"]) if state.get("risk") else RiskManager(cfg.challenge, equity)
     rm.reset(equity)
     state["risk"] = rm.to_dict()
-    path.write_text(json.dumps(state, indent=2))
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(state, indent=2))
+    tmp.replace(path)
     print(f"Reset done: new challenge starting balance ${rm.state.initial:,.2f}.")
 
 
@@ -159,6 +174,7 @@ def main(argv=None):
     sub.add_parser("status", help="show the latest bot status")
     r = sub.add_parser("reset", help="clear a lock and start a new challenge")
     r.add_argument("--yes", action="store_true")
+    r.add_argument("--initial", type=float, help="new starting balance (needed when no API keys are set)")
     args = p.parse_args(argv)
     try:
         cfg = load_config(args.config)

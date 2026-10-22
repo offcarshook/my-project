@@ -7,8 +7,11 @@ Execution model (all conservative where there's a choice):
     limit only once the candle traded through it by half the spread.
   * A stop gapped through at the open fills at the open. If one candle touches both the stop
     and the target, the stop is assumed to have hit first.
-  * Everything is closed at `flatten_at` (or at the last candle of an early-close session).
+  * Everything is closed at `flatten_at`, or 10 minutes before an early close when the exchange
+    calendar (`sessions`) is given, or at the last candle of a session that ends early in the data.
     Nothing is held overnight.
+  * Position sizing at a candle's open only uses prices known at that open.
+  * The profit target is judged on what the account would hold after paying exit costs.
   * Challenge limits are judged on each candle's worst price (low for longs, high for shorts),
     and a breach is filled at that worst price.
 """
@@ -24,7 +27,7 @@ from bot.indicators import ny_index
 from bot.risk import FLATTEN_LOCK, TARGET_HIT, OpenPosition, RiskManager, size_position
 
 TRADE_COLUMNS = ["symbol", "side", "qty", "entry_ts", "entry", "stop", "target", "exit_ts", "exit",
-                 "reason", "pnl", "fees", "risk", "r", "notional"]
+                 "reason", "pnl", "fees", "risk", "r", "notional", "costs"]   # costs = spread + slippage + fees
 
 
 @dataclass
@@ -41,6 +44,8 @@ class _Pos:
     best: float            # best price since entry (for the trailing stop)
     group: str
     leverage: float
+    reserve: float = 0.0   # per-share gap buffer + exit cost reserved at entry (see risk.open_risk)
+    cost: float = 0.0      # spread + slippage + fees paid so far
 
 
 @dataclass
@@ -53,7 +58,8 @@ class SimResult:
 
 
 class Simulator:
-    def __init__(self, cfg: BotConfig, bars: dict[str, pd.DataFrame], strategy, bar_minutes: int = 5):
+    def __init__(self, cfg: BotConfig, bars: dict[str, pd.DataFrame], strategy, bar_minutes: int = 5,
+                 sessions: dict | None = None):
         self.cfg = cfg
         self.costs = CostModel(cfg.costs, cfg.spread_bps)
         self.bar_minutes = bar_minutes
@@ -84,9 +90,17 @@ class Simulator:
         local = ny_index(self.index)
         self.days = np.array([d.isoformat() for d in local.date])
         self.hhmm = np.array(local.strftime("%H:%M"))
-        self.flatten = self.hhmm >= cfg.strategy.flatten_at
         self.last_of_day = np.ones(n, dtype=bool)
         self.last_of_day[:-1] = self.days[:-1] != self.days[1:]
+        # Cutoff per session: flatten_at, or 10 minutes before the session's close from the
+        # exchange calendar (early closes), the same rule the paper trader uses with the broker clock.
+        minutes = local.hour * 60 + local.minute
+        fh, fm = map(int, cfg.strategy.flatten_at.split(":"))
+        cutoff = np.full(n, fh * 60 + fm)
+        if sessions:
+            close = np.array([_hhmm_to_min(sessions[d][1]) if d in sessions else 16 * 60 for d in self.days])
+            cutoff = np.minimum(cutoff, close - 10)
+        self.flatten = minutes >= cutoff
         # Bars where something happens: a raw cross (possible exit) or a filtered signal (entry).
         self.events = {int(i): [int(k) for k in np.nonzero(self.cross[i])[0]]
                        for i in np.nonzero(self.cross.any(axis=1))[0]}
@@ -124,13 +138,28 @@ class Simulator:
             cash += p.qty * fill - fee
             pnl = (fill - p.entry) * p.qty - p.fees - fee
             realized += pnl
+            cost = p.cost + abs(fill - price) * abs(p.qty) + fee
             trades.append([p.symbol, "LONG" if p.qty > 0 else "SHORT", abs(p.qty), p.entry_ts, p.entry, p.stop,
                            p.target, self.index[i], fill, reason, pnl, p.fees + fee, p.risk,
-                           pnl / p.risk if p.risk else np.nan, abs(p.qty) * (p.entry + fill)])
+                           pnl / p.risk if p.risk else np.nan, abs(p.qty) * (p.entry + fill), cost])
+
+        def exit_value(i: int) -> float:
+            """What the account would hold if everything were closed at this candle's close."""
+            lc, value = self.last_close[i], cash
+            for k, p in positions.items():
+                fill = costs.market_fill(p.symbol, -1 if p.qty > 0 else 1, lc[k])
+                value += p.qty * fill - costs.fees(abs(p.qty), fill, is_sell=p.qty > 0)
+            return value
 
         def open_list(i: int) -> list[OpenPosition]:
-            return [OpenPosition(p.symbol, p.qty, p.entry, p.stop, self.last_close[i, k], p.group, p.leverage)
-                    for k, p in positions.items()]
+            # Prices known at this candle's OPEN (entries happen there): never this candle's close.
+            out = []
+            for k, p in positions.items():
+                px = self.open[i, k]
+                if np.isnan(px):
+                    px = self.last_close[i - 1, k] if i > 0 else p.entry
+                out.append(OpenPosition(p.symbol, p.qty, p.entry, p.stop, px, p.group, p.leverage, p.reserve))
+            return out
 
         for i in range(lo, hi):
             t = self.index[i]
@@ -171,7 +200,8 @@ class Simulator:
                         cash -= sig * res.qty * fill + fee
                         target = fill + sig * stop_dist * rk.reward_risk if rk.reward_risk else None
                         positions[k] = _Pos(sym, sig * res.qty, fill, fill - sig * stop_dist, target, t,
-                                            res.qty * stop_dist, fee, atr_k, fill, inst.group, inst.leverage)
+                                            res.qty * stop_dist, fee, atr_k, fill, inst.group, inst.leverage,
+                                            res.details["reserve_per_share"], abs(fill - ref) * res.qty + fee)
                         trades_today += 1
                     pending = {}
 
@@ -214,12 +244,15 @@ class Simulator:
             held = sum(p.qty * lc[k] for k, p in positions.items())
             worst = sum(p.qty * (lw[k] if p.qty > 0 else h[k]) if not np.isnan(lw[k]) else p.qty * lc[k]
                         for k, p in positions.items())
+            best = sum(p.qty * (h[k] if p.qty > 0 else lw[k]) if not np.isnan(h[k]) else p.qty * lc[k]
+                       for k, p in positions.items())
             equity = cash + held
             worst_equity = cash + worst
             balance = cash0 + realized
 
             if rm is not None and not halted:
-                d = rm.update(t, balance, equity, worst_equity)
+                d = rm.update(t, balance, equity, worst_equity, best_equity=cash + best,
+                              target_equity=exit_value(i))
                 if d.action == FLATTEN_LOCK:
                     for k in list(positions):
                         p = positions[k]
@@ -231,7 +264,9 @@ class Simulator:
                     for k in list(positions):
                         close_pos(k, i, lc[k], "profit target reached")
                     decisions.append((t, d.action, d.reason))
-                    halted = True
+                    # The pass only counts if the closed balance made it (it should, since the
+                    # target was judged after exit costs); otherwise keep trading.
+                    halted = rm.confirm_target(cash0 + realized)
                 if halted:
                     equity = worst_equity = cash
                     balance = cash0 + realized
@@ -251,6 +286,11 @@ class Simulator:
         equity_df = equity_df.set_index("ts")
         status, reason = (rm.state.status, rm.state.reason) if rm is not None else ("ACTIVE", "")
         return SimResult(pd.DataFrame(trades, columns=TRADE_COLUMNS), equity_df, status, reason, decisions)
+
+
+def _hhmm_to_min(hhmm: str) -> int:
+    h, m = hhmm.split(":")
+    return int(h) * 60 + int(m)
 
 
 def _stop_dist(price: float, atr_value: float, stop) -> float:

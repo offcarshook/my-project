@@ -59,3 +59,53 @@ def test_regime_labels_use_only_prior_days():
 def test_fmt_table_handles_specials():
     out = report.fmt_table(pd.DataFrame({"a": [1.0, np.nan, -np.inf, 0.123]}))
     assert "| 1 |" in out and "—" in out and "rejected" in out and "0.12" in out
+
+
+def test_selection_rejects_too_many_trades():
+    good = {"trades": 500, "trades_per_session": 5, "expectancy_r": 0.1, "profit_factor": 1.2, "r_tstat": 2.0}
+    churn = {**good, "trades_per_session": 18}
+    assert score(churn, good, 0, 4, 15)[1].startswith("too many trades")
+
+
+def test_choose_risk_gates_on_fail_rate_and_luck_baseline():
+    from bot.pipeline import choose_risk
+    rows = [
+        {"risk_pct": 0.25, "train_pass_pct": 5, "validation_pass_pct": 6, "train_fail_pct": 0, "validation_fail_pct": 0, "edge_margin_pct": 4},
+        {"risk_pct": 0.5, "train_pass_pct": 30, "validation_pass_pct": 25, "train_fail_pct": 2, "validation_fail_pct": 4, "edge_margin_pct": 15},
+        {"risk_pct": 0.75, "train_pass_pct": 45, "validation_pass_pct": 40, "train_fail_pct": 18, "validation_fail_pct": 9, "edge_margin_pct": 20},
+    ]
+    risk, note = choose_risk(rows, 0.25, max_fail_pct=10, min_margin=10)
+    assert risk == 0.5                                  # 0.75 blows up too often
+    risk, note = choose_risk(rows, 0.25, max_fail_pct=10, min_margin=50)
+    assert risk == 0.25 and "stays" in note             # nothing beats luck by 50 points
+
+
+def test_variants_include_config_as_is_and_keep_liquidity():
+    from bot.config import load_config
+    from bot.pipeline import variants
+    cfg = load_config("config.yaml")
+    v = variants(cfg)
+    first = next(iter(v))
+    assert first == "config.yaml as-is" and v[first].strategy == cfg.strategy and v[first].risk == cfg.risk
+    for name, c in v.items():
+        assert c.strategy.filters.liquidity["enabled"] == cfg.strategy.filters.liquidity["enabled"], name
+    wide = v["EMA 9/21 wide stop"].risk.stop
+    assert wide.atr_mult == 3.0 and wide.min_pct == 0.30
+    assert len(v) <= 10
+
+
+def test_luck_baseline_removes_the_edge():
+    from bot.config import load_config
+    from bot.pipeline import luck_baseline
+    cfg = load_config("config.yaml")
+    cfg.backtest.monte_carlo_runs = 500
+    idx = pd.date_range("2026-01-05 15:00", periods=60, freq="D", tz="UTC")
+    eq = pd.Series(25_000.0, index=idx)
+    t = pd.DataFrame({"exit_ts": idx, "pnl": [150.0, -50.0] * 30})   # strong edge
+    real, zero = luck_baseline(t, eq, 25_000, cfg)
+    assert real.pass_rate > zero.pass_rate
+
+
+def test_cap_hit_share():
+    t = pd.DataFrame({"entry_ts": pd.to_datetime(["2026-01-05 15:00"] * 3 + ["2026-01-06 15:00"], utc=True)})
+    assert report.cap_hit_pct(t, sessions=2, cap=3) == 50

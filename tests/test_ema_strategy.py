@@ -101,3 +101,27 @@ def test_stop_distance_atr_clamped_and_fixed():
     assert stop_distance(100, 0.01, stop) == pytest.approx(0.2)    # min 0.2%
     assert stop_distance(100, 5.0, stop) == pytest.approx(1.0)     # max 1%
     assert stop_distance(100, 5.0, StopConfig(type="fixed", fixed_pct=0.3)) == pytest.approx(0.3)
+
+
+def test_atr_and_efficiency_ignore_the_overnight_gap():
+    from bot.indicators import atr
+    prior = candles([100.0] * 20, start="2026-01-02 15:00")
+    zigzag = [101 + (0.05 if i % 2 else -0.05) for i in range(20)]   # +1% gap, then pure chop
+    df = pd.concat([prior, candles(zigzag, start="2026-01-05 09:30")])
+    a = atr(df, 14)
+    first_today = df.index.get_loc(candles(zigzag).index[0])
+    assert a.iloc[first_today + 5] < 0.3                                   # no 1-point gap in the average
+    er = efficiency_ratio(df["close"], 12)
+    assert (er.iloc[first_today:first_today + 12] == 0).all()             # no verdict before 12 candles
+    assert er.iloc[-1] < 0.3                                               # chop reads as chop
+
+
+def test_regime_high_vol_uses_only_past_volatility():
+    from bot import report
+    calm = list(100 + np.sin(np.arange(60)) * 0.2)
+    wild = list(100 + np.sin(np.arange(60)) * 5)
+    close = pd.Series(calm + wild, index=pd.date_range("2026-01-01", periods=120).date)
+    early = report.regimes(close.iloc[:60])
+    full = report.regimes(close)
+    common = early.index.intersection(full.index)
+    assert (early.loc[common, "volatility"] == full.loc[common, "volatility"]).all()

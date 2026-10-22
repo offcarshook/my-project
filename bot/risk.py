@@ -85,32 +85,71 @@ class RiskManager:
         return s.status == ACTIVE and not s.locked and not s.buffered
 
     # ---- the check ----------------------------------------------------------
-    def update(self, ts, balance: float, equity: float, worst_equity: float | None = None) -> RiskDecision:
-        """Call on every candle / poll with balance (closed P&L only) and equity (incl. open
-        positions, after costs). `worst_equity` is the lowest equity seen since the last call
-        (e.g. at the candle's low); breaches are judged on it, like a firm checking every tick."""
+    def update(self, ts, balance: float, equity: float, worst_equity: float | None = None,
+               best_equity: float | None = None, target_equity: float | None = None) -> RiskDecision:
+        """Call on every candle / poll.
+
+        balance        closed P&L only
+        equity         including open positions (marked), after costs paid so far
+        worst_equity   lowest equity since the last call (e.g. at the candle's low); breaches are
+                       judged on it, like a firm checking every tick
+        best_equity    highest equity since the last call; raises the trailing high-water mark
+        target_equity  what the account would be worth if closed now (after exit spread, slippage
+                       and fees); the profit target is judged on it, so a pass survives the exit
+        """
         s = self.state
         self._roll_day(ts, balance, equity)
         worst = equity if worst_equity is None else min(worst_equity, equity)
         daily, total = self.daily_floor(), self.total_floor()
-        if s.locked or s.status != ACTIVE:
-            return RiskDecision(FLATTEN_LOCK if s.status == FAILED else TARGET_HIT, s.reason, daily, total)
+        if s.locked or s.status == FAILED:
+            return RiskDecision(FLATTEN_LOCK, s.reason, daily, total)
+        if s.status == PASSED:
+            return RiskDecision(TARGET_HIT, s.reason, daily, total)
         if worst <= total:
             return self._fail(f"max total loss hit (equity {worst:,.2f} <= floor {total:,.2f})", daily, total)
         if worst <= daily:
             return self._fail(f"daily loss limit hit (equity {worst:,.2f} <= floor {daily:,.2f})", daily, total)
 
-        basis = equity if self.rules.trailing_basis == "equity" else balance
-        s.high_water = max(s.high_water or s.initial, basis)
-        if equity >= self.target():
-            if self.rules.stop_at_target:
-                s.status, s.reason = PASSED, f"profit target reached (equity {equity:,.2f})"
-            return RiskDecision(TARGET_HIT, f"profit target reached (equity {equity:,.2f})", daily, total)
+        if self.rules.trailing_basis == "equity":
+            peak = max(equity, best_equity if best_equity is not None else equity)
+        else:
+            peak = balance
+        s.high_water = max(s.high_water or s.initial, peak)
+
+        exit_value = equity if target_equity is None else min(target_equity, equity)
+        if exit_value >= self.target() and self.rules.stop_at_target:
+            s.status, s.reason = PASSED, f"profit target reached (equity after exit costs {exit_value:,.2f})"
+            return RiskDecision(TARGET_HIT, s.reason, daily, total)
+        # With stop_at_target false the target is only informational: keep trading normally.
 
         s.buffered = self.risk_room(equity) <= 0
         if s.buffered:
             return RiskDecision(NO_NEW_ENTRIES, "inside the safety buffer of a loss limit", daily, total)
         return RiskDecision(OK, "", daily, total)
+
+    def confirm_target(self, balance: float) -> bool:
+        """After flattening on a pass, check the closed balance really made the target. If exit
+        fills slipped it below, go back to ACTIVE instead of staying stuck in PASSED."""
+        s = self.state
+        if s.status == PASSED and balance < self.target():
+            s.status, s.reason = ACTIVE, ""
+            return False
+        return s.status == PASSED
+
+    # ---- display helpers (status file / dashboard) ---------------------------
+    def day_start_reference(self) -> float:
+        s = self.state
+        return {"balance": s.day_start_balance, "equity": s.day_start_equity,
+                "higher": max(s.day_start_balance, s.day_start_equity)}[self.rules.day_start_reference]
+
+    def usage(self, equity: float) -> dict:
+        """How much of each limit is used, as % of that limit (100 = breached)."""
+        daily_room = self.day_start_reference() - self.daily_floor()
+        total_room = self.state.initial * self.rules.max_total_loss_pct / 100
+        return {"daily_used_pct_of_limit": max(self.day_start_reference() - equity, 0) / daily_room * 100,
+                "total_used_pct_of_limit": max(total_room - (equity - self.total_floor()), 0) / total_room * 100,
+                "distance_to_daily_floor": equity - self.daily_floor(),
+                "distance_to_total_floor": equity - self.total_floor()}
 
     def _fail(self, reason: str, daily: float, total: float) -> RiskDecision:
         self.state.status, self.state.reason, self.state.locked = FAILED, reason, True
@@ -141,6 +180,7 @@ class OpenPosition:
     price: float          # latest price
     group: str = "other"
     leverage: float = 1.0
+    reserve_per_share: float = 0.0   # gap buffer + exit cost set aside at entry, beyond the stop
 
 
 @dataclass
@@ -152,13 +192,15 @@ class SizingResult:
 
 
 def open_risk(positions: list[OpenPosition]) -> float:
-    """Money lost if every open position hit its stop from here (unprotected = whole value)."""
+    """Money lost if every open position hit its stop from here, including the gap buffer and
+    exit costs each one was sized with (unprotected = whole value)."""
     total = 0.0
     for p in positions:
         if p.stop is None:
             total += abs(p.qty) * p.price
         else:
-            total += abs(p.qty) * max((p.price - p.stop) if p.qty > 0 else (p.stop - p.price), 0.0)
+            to_stop = max((p.price - p.stop) if p.qty > 0 else (p.stop - p.price), 0.0)
+            total += abs(p.qty) * (to_stop + p.reserve_per_share)
     return total
 
 
@@ -197,4 +239,5 @@ def size_position(symbol: str, direction: int, entry_price: float, stop_dist: fl
     if qty < 1:
         return SizingResult(0, "position would be under 1 share after risk and exposure limits")
     return SizingResult(qty, "", qty * per_share, {"per_share_risk": per_share, "budget": budget,
-                                                   "max_by_exposure": max_by_exposure})
+                                                   "max_by_exposure": max_by_exposure,
+                                                   "reserve_per_share": per_share - stop_dist})

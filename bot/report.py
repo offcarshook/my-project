@@ -23,7 +23,7 @@ def trade_stats(trades: pd.DataFrame, sessions: int, starting_cash: float) -> di
         return {"trades": 0, "trades_per_session": 0.0, "win_rate_pct": np.nan, "avg_win": np.nan,
                 "avg_loss": np.nan, "profit_factor": np.nan, "net_pnl": 0.0, "net_return_pct": 0.0,
                 "expectancy": np.nan, "expectancy_r": np.nan, "r_tstat": np.nan, "longest_losing_streak": 0,
-                "fees": 0.0}
+                "fees": 0.0, "cost_r": np.nan}
     pnl, r = trades["pnl"], trades["r"].dropna()
     wins, losses = pnl[pnl > 0], pnl[pnl <= 0]
     gross_loss = -losses.sum()
@@ -42,6 +42,7 @@ def trade_stats(trades: pd.DataFrame, sessions: int, starting_cash: float) -> di
         "r_tstat": r.mean() / r.std(ddof=1) * np.sqrt(len(r)) if len(r) > 2 and r.std(ddof=1) > 0 else np.nan,
         "longest_losing_streak": longest_losing_streak(pnl),
         "fees": trades["fees"].sum(),
+        "cost_r": (trades["costs"] / trades["risk"]).mean() if "costs" in trades and "risk" in trades else np.nan,
     }
 
 
@@ -68,6 +69,14 @@ def summarize(res, starting_cash: float) -> dict:
     sessions = _sessions(res.equity)
     return {**trade_stats(res.trades, sessions, starting_cash), **curve_stats(res.equity, res.trades, starting_cash),
             "sessions": sessions}
+
+
+def cap_hit_pct(trades: pd.DataFrame, sessions: int, cap: int) -> float:
+    """Share of sessions where entries reached the daily trade limit (later signals were dropped)."""
+    if trades.empty:
+        return 0.0
+    per_day = pd.Series(ny_index(pd.DatetimeIndex(trades["entry_ts"])).date).value_counts()
+    return (per_day >= cap).sum() / max(sessions, 1) * 100
 
 
 def per_instrument(trades: pd.DataFrame, sessions: int, starting_cash: float) -> pd.DataFrame:
@@ -99,13 +108,13 @@ def monthly(trades: pd.DataFrame, equity: pd.DataFrame) -> pd.DataFrame:
 def regimes(daily_close: pd.Series, lookback: int = 20, trend_pct: float = 3.0, high_vol_mult: float = 1.5) -> pd.DataFrame:
     """Label each session by the regime symbol's trailing behaviour, known before that session:
     trend = up / down / sideways from the prior `lookback`-day return; vol = high when the prior
-    `lookback`-day volatility is over `high_vol_mult` x its full-sample median.
-    (Labels are for reporting only, never used for trading.)"""
+    `lookback`-day volatility is over `high_vol_mult` x the median of all volatility readings up
+    to that day (expanding, so no future data). Labels are for reporting only."""
     ret = daily_close.pct_change()
     trailing = (daily_close / daily_close.shift(lookback) - 1).shift(1) * 100
     vol = ret.rolling(lookback).std().shift(1)
     trend = np.where(trailing > trend_pct, "trending up", np.where(trailing < -trend_pct, "declining", "sideways"))
-    high = vol > high_vol_mult * vol.median()
+    high = vol > high_vol_mult * vol.expanding(min_periods=lookback).median()
     out = pd.DataFrame({"trend": trend, "volatility": np.where(high, "high vol", "normal vol")}, index=daily_close.index)
     return out[trailing.notna()]
 

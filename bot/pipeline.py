@@ -22,28 +22,42 @@ COMPLEXITY_PENALTY = 0.15   # t-stat points per enabled filter
 
 
 def variants(cfg: BotConfig) -> dict[str, BotConfig]:
-    """The small, fixed set of configurations to compare."""
-    def make(fast, slow, filtered=False, chop=False, stop="atr", rr=None):
+    """The small, fixed set of configurations to compare. The first one is config.yaml exactly
+    as the paper bot will trade it; the others change one idea at a time. Liquidity stays at
+    its config.yaml setting everywhere, since the paper bot always applies it."""
+    liquidity_on = cfg.strategy.filters.liquidity["enabled"]
+
+    def make(fast, slow, filtered=False, chop=False, atr_mult=None, min_pct=None, rr=None):
         c = copy.deepcopy(cfg)
         c.strategy.fast, c.strategy.slow = fast, slow
-        for name in ("htf_trend", "atr_band", "liquidity", "chop"):
+        for name in ("htf_trend", "atr_band", "chop"):
             c.strategy.filters.__dict__[name] = {**getattr(c.strategy.filters, name),
                                                  "enabled": filtered and FILTERS_ON.get(name, False)}
         c.strategy.filters.chop["enabled"] = chop
-        c.risk.stop.type = stop
+        c.strategy.filters.liquidity["enabled"] = liquidity_on
+        c.risk.stop.type = "atr"
+        if atr_mult is not None:
+            c.risk.stop.atr_mult = atr_mult
+        if min_pct is not None:
+            c.risk.stop.min_pct = max(min_pct, c.risk.stop.min_pct)
+            c.risk.stop.max_pct = max(c.risk.stop.max_pct, c.risk.stop.min_pct)
         if rr is not None:
             c.risk.reward_risk = rr
         return c
 
     rr = cfg.risk.reward_risk
+    # "Wide" = 3x ATR stop with a 0.30% floor and a 1.5R target: fewer stop-outs from 5-minute
+    # noise and a smaller cost per R. Position size shrinks with the wider stop, which the risk
+    # sweep can make up for by raising risk per trade.
     return {
+        "config.yaml as-is": copy.deepcopy(cfg),
         "EMA 9/21": make(9, 21),
         "EMA 10/30": make(10, 30),
         "EMA 20/50": make(20, 50),
-        "EMA 9/21 fixed stop": make(9, 21, stop="fixed"),
-        "EMA 9/21 1.5R" if rr != 1.5 else "EMA 9/21 2R": make(9, 21, rr=1.5 if rr != 1.5 else 2.0),
+        ("EMA 9/21 1.5R" if rr != 1.5 else "EMA 9/21 2R"): make(9, 21, rr=1.5 if rr != 1.5 else 2.0),
+        "EMA 9/21 wide stop": make(9, 21, atr_mult=3.0, min_pct=0.30, rr=1.5),
+        "EMA 20/50 wide stop": make(20, 50, atr_mult=3.0, min_pct=0.30, rr=1.5),
         "EMA 9/21 filtered": make(9, 21, filtered=True),
-        "EMA 10/30 filtered": make(10, 30, filtered=True),
         "EMA 20/50 filtered": make(20, 50, filtered=True),
         "EMA 9/21 filtered + chop": make(9, 21, filtered=True, chop=True),
     }
@@ -69,19 +83,77 @@ def challenge_windows(sim: Simulator, start, end, cfg: BotConfig) -> pd.DataFram
     return pd.DataFrame(rows, columns=["start", "result", "reason", "trading_days", "calendar_days", "return_pct"])
 
 
-def score(train: dict, val: dict, n_filters: int, min_trades: float) -> tuple[float, str]:
+def score(train: dict, val: dict, n_filters: int, min_trades: float, max_trades: float = np.inf) -> tuple[float, str]:
     """Selection score: the weaker of the train/validation t-stats of mean R, minus a penalty
-    per filter. Configs losing money (after costs) in either period, or trading too rarely,
-    are rejected outright."""
+    per filter. Configs losing money (after costs) in either period, or trading outside the
+    wanted trades-per-session band, are rejected outright."""
     for name, m in (("train", train), ("validation", val)):
         if not m["trades"]:
             return -np.inf, f"no trades in {name}"
         if m["trades_per_session"] < min_trades:
             return -np.inf, f"too few trades in {name} ({m['trades_per_session']:.1f}/session)"
+        if m["trades_per_session"] > max_trades:
+            return -np.inf, f"too many trades in {name} ({m['trades_per_session']:.1f}/session)"
         if not (m["expectancy_r"] > 0 and m["profit_factor"] > 1):
             return -np.inf, f"loses money after costs in {name}"
     s = min(train["r_tstat"], val["r_tstat"]) - COMPLEXITY_PENALTY * n_filters
     return s, "eligible"
+
+
+def luck_baseline(trades: pd.DataFrame, equity: pd.Series, cash: float, cfg: BotConfig, seed: int = 0):
+    """Monte Carlo pass rates for the real trades and for the same trades with their average
+    edge removed (every trade's return shifted so the mean is zero). The gap between the two is
+    how much of the pass rate comes from the edge rather than from variance."""
+    days = daily_trade_returns(trades.rename(columns={"exit_ts": "ts"}), equity, cash)
+    flat = np.concatenate([d for d in days if len(d)]) if any(len(d) for d in days) else np.array([0.0])
+    centred = [d - flat.mean() for d in days]
+    n_days = max(round(cfg.challenge.window_days * 252 / 365), 1)
+    runs = cfg.backtest.monte_carlo_runs
+    real = simulate_luck(days, _luck_rules(cfg), n_days=n_days, n_sims=runs, seed=seed)
+    zero = simulate_luck(centred, _luck_rules(cfg), n_days=n_days, n_sims=runs, seed=seed)
+    return real, zero
+
+
+def choose_risk(rows: list[dict], default: float, max_fail_pct: float, min_margin: float) -> tuple[float, str]:
+    """Pick the risk level with the best worst-case (train vs validation) pass rate, among
+    levels that fail no more than `max_fail_pct` in either period and beat the zero-edge luck
+    baseline by at least `min_margin` points. Otherwise keep the configured risk."""
+    ok = [r for r in rows if max(r["train_fail_pct"], r["validation_fail_pct"]) <= max_fail_pct
+          and r["edge_margin_pct"] >= min_margin]
+    if not ok:
+        return default, (f"No risk level beat the luck baseline by {min_margin:g} points with at most "
+                         f"{max_fail_pct:g}% blown challenges, so risk stays at {default:g}%.")
+    best = max(ok, key=lambda r: (min(r["train_pass_pct"], r["validation_pass_pct"]), -r["risk_pct"]))
+    return best["risk_pct"], (f"{best['risk_pct']:g}% risk had the best worst-case pass rate "
+                              f"({min(best['train_pass_pct'], best['validation_pass_pct']):.0f}%) while beating the "
+                              f"luck baseline by {best['edge_margin_pct']:.0f} points.")
+
+
+def sweep_risk(v: BotConfig, sim: Simulator, tr, va, cash: float, log=print) -> pd.DataFrame:
+    """Challenge outcomes for each risk level in backtest.risk_grid, on train and validation only."""
+    rows = []
+    original = sim.cfg
+    try:
+        for r in v.backtest.risk_grid:
+            c = copy.deepcopy(v)
+            c.risk.risk_per_trade_pct = r
+            c.risk.max_gross_exposure = max(c.risk.max_gross_exposure, v.backtest.sweep_max_gross_exposure)
+            sim.cfg = c
+            log(f"  risk {r:g}%")
+            ch_tr = report.challenge_summary(challenge_windows(sim, tr[0], tr[1] - pd.Timedelta(days=1), c))
+            ch_va = report.challenge_summary(challenge_windows(sim, va[0], va[1] - pd.Timedelta(days=1), c))
+            res_va = sim.run(*va)
+            row = {"risk_pct": r, "train_pass_pct": ch_tr.get("pass_pct", 0), "train_fail_pct": ch_tr.get("fail_pct", 0),
+                   "validation_pass_pct": ch_va.get("pass_pct", 0), "validation_fail_pct": ch_va.get("fail_pct", 0),
+                   "mc_pass_pct": np.nan, "zero_edge_pass_pct": np.nan, "edge_margin_pct": -np.inf}
+            if len(res_va.trades) >= 20:
+                real, zero = luck_baseline(res_va.trades, res_va.equity["equity"], cash, c)
+                row.update(mc_pass_pct=real.pass_rate * 100, zero_edge_pass_pct=zero.pass_rate * 100,
+                           edge_margin_pct=(real.pass_rate - zero.pass_rate) * 100)
+            rows.append(row)
+    finally:
+        sim.cfg = original
+    return pd.DataFrame(rows)
 
 
 def _period(p):
@@ -99,7 +171,7 @@ def _luck_rules(cfg: BotConfig):
 
 
 def run_pipeline(cfg: BotConfig, bars: dict[str, pd.DataFrame], out_dir: str = "reports",
-                 synthetic: bool = False, log=print) -> Path:
+                 synthetic: bool = False, log=print, sessions: dict | None = None) -> Path:
     bar_minutes = TF_MINUTES[cfg.strategy.timeframe]
     cash = cfg.backtest.starting_cash
     feed = cfg.backtest.data_feed
@@ -108,7 +180,7 @@ def run_pipeline(cfg: BotConfig, bars: dict[str, pd.DataFrame], out_dir: str = "
     rows, sims, details = [], {}, {}
     for name, v in variants(cfg).items():
         log(f"[{name}] simulating train + validation")
-        sim = Simulator(v, bars, EmaCross(v.strategy, v.risk.stop, bar_minutes, feed), bar_minutes)
+        sim = Simulator(v, bars, EmaCross(v.strategy, v.risk.stop, bar_minutes, feed), bar_minutes, sessions)
         sims[name] = (v, sim)
         m_tr = report.summarize(sim.run(*tr), cash)
         res_va = sim.run(*va)
@@ -116,7 +188,7 @@ def run_pipeline(cfg: BotConfig, bars: dict[str, pd.DataFrame], out_dir: str = "
         ch_tr = report.challenge_summary(challenge_windows(sim, tr[0], tr[1] - pd.Timedelta(days=1), v))
         ch_va = report.challenge_summary(challenge_windows(sim, va[0], va[1] - pd.Timedelta(days=1), v))
         n_filters = len([f for f in v.strategy.filters.enabled() if f != "liquidity"])
-        s, verdict = score(m_tr, m_va, n_filters, cfg.backtest.min_trades_per_day)
+        s, verdict = score(m_tr, m_va, n_filters, cfg.backtest.min_trades_per_day, cfg.backtest.max_trades_per_day)
         details[name] = report.per_instrument(res_va.trades, m_va["sessions"], cash)
         for period, m, ch in (("train", m_tr, ch_tr), ("validation", m_va, ch_va)):
             rows.append({"config": name, "period": period, **m, **{f"challenge_{k}": x for k, x in ch.items()},
@@ -124,19 +196,33 @@ def run_pipeline(cfg: BotConfig, bars: dict[str, pd.DataFrame], out_dir: str = "
 
     comparison = pd.DataFrame(rows)
     eligible = comparison[(comparison.period == "validation") & np.isfinite(comparison.score)]
+    sweep, risk_note = pd.DataFrame(), ""
     if len(eligible):
         chosen = eligible.sort_values("score", ascending=False).iloc[0]["config"]
         selection_note = (f"**{chosen}** had the best robust score (weaker of train/validation t-stat of mean R, "
-                          f"minus {COMPLEXITY_PENALTY} per filter) among configs profitable after costs in both periods.")
+                          f"minus {COMPLEXITY_PENALTY} per filter) among configs profitable after costs in both periods "
+                          f"and trading {cfg.backtest.min_trades_per_day:g}-{cfg.backtest.max_trades_per_day:g} times per session.")
     else:
-        chosen = "EMA 9/21"
+        chosen = "config.yaml as-is"
         selection_note = ("**No configuration was profitable after costs in both train and validation.** "
-                          "The baseline EMA 9/21 is evaluated on the test period for information only; "
+                          "Your config.yaml is evaluated on the test period for information only; "
                           "this is not evidence of an edge.")
     log(f"selected: {chosen}")
-
     v, sim = sims[chosen]
-    log(f"[{chosen}] running the untouched test period once")
+    if len(eligible):
+        log(f"[{chosen}] risk-per-trade sweep on train + validation")
+        sweep = sweep_risk(v, sim, tr, va, cash, log)
+        risk, risk_note = choose_risk(sweep.to_dict("records"), v.risk.risk_per_trade_pct,
+                                      cfg.backtest.max_fail_pct, cfg.backtest.min_edge_margin_pct)
+        if risk != v.risk.risk_per_trade_pct:
+            v = copy.deepcopy(v)
+            v.risk.risk_per_trade_pct = risk
+            v.risk.max_gross_exposure = max(v.risk.max_gross_exposure, cfg.backtest.sweep_max_gross_exposure)
+            sim.cfg = v
+    else:
+        risk_note = "Skipped: there's no edge to size up, and a higher risk would only add variance."
+
+    log(f"[{chosen} @ {v.risk.risk_per_trade_pct:g}% risk] running the untouched test period once")
     test = sim.run(*te)
     m_te = report.summarize(test, cash)
     windows = challenge_windows(sim, te[0], te[1] - pd.Timedelta(days=1), v)
@@ -152,16 +238,15 @@ def run_pipeline(cfg: BotConfig, bars: dict[str, pd.DataFrame], out_dir: str = "
         labels = labels[labels.index.isin(test_days)]
     regime_table = report.by_regime(test.trades, labels)
 
-    mc = None
+    mc = mc_zero = None
     if len(test.trades) >= 20:
-        mc_trades = test.trades.rename(columns={"exit_ts": "ts"})
-        days = daily_trade_returns(mc_trades, test.equity["equity"], cash)
-        n_days = max(round(cfg.challenge.window_days * 252 / 365), 1)
-        mc = simulate_luck(days, _luck_rules(cfg), n_days=n_days, n_sims=cfg.backtest.monte_carlo_runs)
+        mc, mc_zero = luck_baseline(test.trades, test.equity["equity"], cash, v)
+    m_te["cap_hit_pct"] = report.cap_hit_pct(test.trades, m_te["sessions"], v.risk.max_trades_per_day)
 
     out = Path(out_dir) / datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     out.mkdir(parents=True, exist_ok=True)
     comparison.to_csv(out / "comparison.csv", index=False)
+    sweep.to_csv(out / "risk_sweep.csv", index=False)
     test.trades.to_csv(out / "test_trades.csv", index=False)
     test.equity.to_csv(out / "test_equity.csv")
     windows.to_csv(out / "test_challenges.csv", index=False)
@@ -170,16 +255,19 @@ def run_pipeline(cfg: BotConfig, bars: dict[str, pd.DataFrame], out_dir: str = "
     for name, df in details.items():
         df.to_csv(out / f"validation_per_instrument_{name.replace(' ', '_').replace('/', '-')}.csv")
     with open(out / "selected_config.json", "w") as fh:
-        json.dump({"name": chosen, "strategy": asdict(v.strategy), "risk": asdict(v.risk)}, fh, indent=2)
+        json.dump({"name": chosen, "edge_found": bool(len(eligible)), "strategy": asdict(v.strategy),
+                   "risk": asdict(v.risk)}, fh, indent=2)
 
     md = _markdown(cfg, bars, comparison, chosen, selection_note, m_te, ch_te, inst, months, regime_table, mc,
-                   windows, synthetic)
+                   windows, synthetic, sweep=sweep, risk_note=risk_note, chosen_cfg=v, mc_zero=mc_zero)
     (out / "report.md").write_text(md)
     log(f"report written to {out / 'report.md'}")
     return out
 
 
-def _markdown(cfg, bars, comparison, chosen, note, m_te, ch_te, inst, months, regime_table, mc, windows, synthetic):
+def _markdown(cfg, bars, comparison, chosen, note, m_te, ch_te, inst, months, regime_table, mc, windows, synthetic,
+              sweep=None, risk_note="", chosen_cfg=None, mc_zero=None):
+    chosen_cfg = chosen_cfg or cfg
     L = []
     if synthetic:
         L += ["# ⚠️ SYNTHETIC DATA: PIPELINE CHECK ONLY",
@@ -205,11 +293,17 @@ def _markdown(cfg, bars, comparison, chosen, note, m_te, ch_te, inst, months, re
         L += [f"### {period.title()}", "", report.fmt_table(t[[c for c in cols if c in t]]), ""]
     verdicts = comparison[comparison.period == "validation"].set_index("config")[["score", "verdict"]]
     L += ["### Selection", "", report.fmt_table(verdicts), "", note, ""]
+    L += ["### Risk per trade (train + validation only)", ""]
+    if sweep is not None and len(sweep):
+        L += [report.fmt_table(sweep.set_index("risk_pct")), "",
+              "_mc_pass / zero_edge_pass: Monte Carlo pass rates for the validation trades as they are and with their "
+              "average edge removed. edge_margin is the difference, i.e. how much of the pass rate isn't just luck._", ""]
+    L += [risk_note, ""]
 
-    L += [f"## 2. Untouched test period: {chosen}", ""]
+    L += [f"## 2. Untouched test period: {chosen} @ {chosen_cfg.risk.risk_per_trade_pct:g}% risk per trade", ""]
     keys = ["trades", "trades_per_session", "win_rate_pct", "avg_win", "avg_loss", "profit_factor", "net_pnl",
-            "net_return_pct", "expectancy", "expectancy_r", "r_tstat", "max_drawdown_pct", "max_daily_drawdown_pct",
-            "longest_losing_streak", "exposure_pct", "turnover", "fees", "sessions"]
+            "net_return_pct", "expectancy", "expectancy_r", "r_tstat", "cost_r", "max_drawdown_pct",
+            "max_daily_drawdown_pct", "longest_losing_streak", "exposure_pct", "turnover", "fees", "cap_hit_pct", "sessions"]
     L += [report.fmt_table(pd.DataFrame({"value": {k: m_te.get(k) for k in keys}})), ""]
     L += ["### Simulated challenges (test period)", "",
           report.fmt_table(pd.DataFrame({"value": ch_te})), "",
@@ -230,7 +324,11 @@ def _markdown(cfg, bars, comparison, chosen, note, m_te, ch_te, inst, months, re
             "timeout_pct": mc.timeout_rate * 100,
             "median_days_to_pass": float(np.median(mc.days_to_pass)) if len(mc.days_to_pass) else np.nan,
             "median_window_return_pct": float(np.median(r)), "p5_window_return_pct": float(np.percentile(r, 5)),
-            "p95_window_return_pct": float(np.percentile(r, 95))}})), "",
+            "p95_window_return_pct": float(np.percentile(r, 95)),
+            "zero_edge_pass_pct": mc_zero.pass_rate * 100 if mc_zero else np.nan,
+            "edge_pass_margin_pct": (mc.pass_rate - mc_zero.pass_rate) * 100 if mc_zero else np.nan}})), "",
+              "_zero_edge_pass: the same trades with their average edge removed. If pass ≈ zero_edge_pass, the pass "
+              "rate is luck, not edge._", "",
               "**Assumptions and limits:** whole test-period trading days (with all their trades) are drawn at random "
               "with replacement into challenge-length sequences, so it assumes days are independent and that the "
               "test period represents the future. It keeps intraday trade clustering but ignores regime changes, "
@@ -243,8 +341,10 @@ def _markdown(cfg, bars, comparison, chosen, note, m_te, ch_te, inst, months, re
     L += ["## 4. How to read this", "",
           "* A config is only credible if it is profitable after costs in train, validation **and** test, with a "
           "reasonable number of trades. One good period, a high win rate or one challenge reaching +8% is not evidence of an edge.",
-          "* Costs: half the assumed spread + slippage on every market/stop fill, regulatory fees on sells; take-profit "
-          "limits need price to trade through by half the spread. Spreads are assumptions, not historical quotes.",
+          "* Costs: half the assumed spread (never under one cent) + slippage on every market/stop fill, regulatory "
+          "fees on sells; take-profit limits need price to trade through by half the spread. Spreads are assumptions, "
+          "not historical quotes. `cost_r` is the average trading cost per trade in R: the gross edge has to beat it.",
+          "* `cap_hit_pct`: share of sessions that hit the daily trade limit, where later signals were skipped.",
           "* Fills at the next candle's open, stop-first when a candle touches both, stops gapped through fill at the "
           "open, flat by the configured cutoff, no overnight positions.", ""]
     return "\n".join(L)

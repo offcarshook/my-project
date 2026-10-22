@@ -10,17 +10,37 @@ def ema(series: pd.Series, length: int) -> pd.Series:
     return series.ewm(span=length, adjust=False).mean()
 
 
+def session_day(index: pd.Index) -> pd.Series | None:
+    """New York trading date of each candle, or None when the index has no timestamps."""
+    if not isinstance(index, pd.DatetimeIndex):
+        return None
+    return pd.Series(ny_index(index).date, index=index)
+
+
 def atr(df: pd.DataFrame, length: int = 14) -> pd.Series:
+    """Average true range. The overnight gap is left out: on a session's first candle the
+    true range is just high - low, so a gap doesn't inflate stops for the next hour."""
     prev_close = df["close"].shift()
+    day = session_day(df.index)
+    if day is not None:
+        prev_close[day.ne(day.shift()).to_numpy()] = np.nan
     true_range = pd.concat([df["high"] - df["low"], (df["high"] - prev_close).abs(),
                             (df["low"] - prev_close).abs()], axis=1).max(axis=1)
     return true_range.rolling(length).mean()
 
 
 def efficiency_ratio(close: pd.Series, length: int) -> pd.Series:
-    """Kaufman efficiency ratio: net move / total path over `length` candles (0 = chop, 1 = trend)."""
-    net = (close - close.shift(length)).abs()
-    path = close.diff().abs().rolling(length).sum()
+    """Kaufman efficiency ratio: net move / total path over `length` candles (0 = chop, 1 = trend).
+    Measured within each session, so an overnight gap can't make a choppy morning look like a
+    trend; the first `length` candles of a session read 0 (no verdict yet, so the filter blocks)."""
+    day = session_day(close.index)
+    if day is None:
+        net = (close - close.shift(length)).abs()
+        path = close.diff().abs().rolling(length).sum()
+    else:
+        g = close.groupby(day.to_numpy())
+        net = (close - g.shift(length)).abs()
+        path = g.diff().abs().groupby(day.to_numpy()).rolling(length).sum().reset_index(level=0, drop=True)
     return (net / path.replace(0, np.nan)).fillna(0.0)
 
 

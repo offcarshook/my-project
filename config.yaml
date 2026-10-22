@@ -55,7 +55,8 @@ strategy:
 # Risk per trade and portfolio limits
 # ---------------------------------------------------------------------------
 risk:
-  risk_per_trade_pct: 0.25     # % of equity lost if the stop is hit (test range 0.10-0.50)
+  risk_per_trade_pct: 0.25     # % of equity lost if the stop is hit. The backtest sweeps backtest.risk_grid
+                               # and recommends a level; copy it here after checking the report.
   stop:
     type: atr                  # atr | fixed
     atr_mult: 1.5              # stop distance = atr_mult x ATR ...
@@ -69,9 +70,10 @@ risk:
     atr_mult: 1.0              # trail this many ATR behind the best price
   max_positions: 3             # simultaneous positions
   max_per_group: 2             # same group + same effective direction
-  max_gross_exposure: 3.0      # leverage-adjusted notional / equity
-  max_trades_per_day: 20       # new entries per day
-  sizing_buffer_pct: 0.05      # extra % of price added to the stop when sizing (slippage/gaps)
+  max_gross_exposure: 4.0      # leverage-adjusted notional / equity (Alpaca intraday buying power is ~4x)
+  max_trades_per_day: 15       # new entries per day
+  sizing_buffer_pct: 0.02      # extra % of price added to the stop when sizing, for gaps only
+                               # (spread and slippage are already in the cost estimate)
 
 # ---------------------------------------------------------------------------
 # Prop challenge rules. Firms calculate these differently: set them to YOUR firm's
@@ -110,7 +112,7 @@ costs:
 # Backtest
 # ---------------------------------------------------------------------------
 backtest:
-  data_feed: sip                # sip (all exchanges, free with a 15-min delay) | iex
+  data_feed: iex                # iex = the same feed the paper bot trades on (recommended) | sip = all exchanges
   cache_dir: data/cache
   starting_cash: 25000          # >= $25k avoids US pattern-day-trader limits on margin accounts
   # Chronological, non-overlapping. The test period is only run once, on the chosen config.
@@ -119,8 +121,16 @@ backtest:
   test:       ["2025-04-01", "2026-09-30"]
   challenge_every_n_days: 5     # start a simulated challenge every N sessions
   monte_carlo_runs: 5000
-  min_trades_per_day: 2         # configs that trade less than this are rejected
+  min_trades_per_day: 4         # configs trading outside this band (per session) are rejected
+  max_trades_per_day: 15
   regime_symbol: QQQ            # market regime labels come from this symbol's daily moves
+  # Risk-per-trade sweep (train + validation only) for the chosen signal config. A level is only
+  # recommended if its challenge fail rate is <= max_fail_pct and its pass rate beats a zero-edge
+  # (pure luck) baseline by min_edge_margin_pct points; otherwise risk_per_trade_pct is kept.
+  risk_grid: [0.25, 0.375, 0.5, 0.75]
+  sweep_max_gross_exposure: 4.0
+  max_fail_pct: 10
+  min_edge_margin_pct: 10
 
 # ---------------------------------------------------------------------------
 # Paper trading (Alpaca paper account only; live endpoints are refused)

@@ -599,20 +599,59 @@ def main(argv=None):
     p.add_argument("--config", required=True)
     p.add_argument("--data", required=True)
     p.add_argument("--out", required=True)
-    p.add_argument("stage", choices=["baseline", "diagnose", "variants", "robustness", "challenge", "final"])
+    p.add_argument("stage", choices=["baseline", "diagnose", "variants", "robustness", "challenge", "final", "costs"])
     p.add_argument("--frozen", default=str(Path(__file__).with_name("frozen_orb.json")))
     p.add_argument("--names", default="baseline,A2 + F1", help="challenge: candidates to compare")
     a = p.parse_args(argv)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     cfg, bars, sessions = load(a.config, a.data)
-    if a.stage == "final":
+    if a.stage == "costs":
+        stage_costs(cfg, bars, sessions, out)
+    elif a.stage == "final":
         stage_final(cfg, bars, sessions, out, a.frozen)
     elif a.stage == "challenge":
         stage_challenge(cfg, bars, sessions, out, tuple(a.names.split(",")))
     else:
         {"baseline": stage_baseline, "diagnose": stage_diagnose, "variants": stage_variants,
          "robustness": stage_robustness}[a.stage](cfg, bars, sessions, out)
+
+
+
+# ---------------------------------------------------------------------------
+# cost check: how much do the cost assumptions decide the verdict?
+# ---------------------------------------------------------------------------
+COST_SCENARIOS = {   # (slippage bps per fill, spread multiplier); spreads keep the one-cent floor
+    "as assumed (1 bp slip, config spreads)": (1.0, 1.0),
+    "half slippage (0.5 bp)": (0.5, 1.0),
+    "no slippage, spread only": (0.0, 1.0),
+    "no costs at all (upper bound)": (0.0, 0.0),
+}
+
+
+def stage_costs(cfg, bars, sessions, out):
+    cands = candidates(cfg)
+    rows = []
+    for name in ("baseline", "A2 + F1"):
+        for label, (slip, spread_mult) in COST_SCENARIOS.items():
+            v = copy.deepcopy(cands[name])
+            v.costs.slippage_bps = slip
+            v.costs.default_spread_bps *= spread_mult
+            for inst in v.instruments.values():
+                if inst.spread_bps is not None:
+                    inst.spread_bps *= spread_mult
+            if spread_mult == 0:
+                v.costs.sec_fee_rate = v.costs.taf_per_share = 0
+            sim = simulator(v, bars, sessions)
+            row = {"candidate": name, "costs": label}
+            for pname, rng in (("train", TRAIN), ("val", VAL), ("late", SEEN)):
+                res = sim.run(*period(rng))
+                m = metrics(res, v.backtest.starting_cash)
+                row[f"{pname}_r"], row[f"{pname}_t"] = m["expectancy_r"], m["r_tstat"]
+                row[f"{pname}_cost_r"], row[f"{pname}_ret"] = m["cost_r"], m["net_return_pct"]
+            rows.append(row)
+            print({k: (round(x, 3) if isinstance(x, float) else x) for k, x in row.items()}, flush=True)
+    pd.DataFrame(rows).to_csv(out / "cost_check.csv", index=False)
 
 
 if __name__ == "__main__":

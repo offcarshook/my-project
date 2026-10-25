@@ -8,3 +8,6 @@ state/
 logs/
 reports/
 vendor/
+
+# resumable Kronos forecast caches (final forecasts are saved as kronos_forecasts_*.csv)
+nq/kronos_bot/results/cache_*.parquet

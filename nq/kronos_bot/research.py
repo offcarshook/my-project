@@ -117,7 +117,8 @@ def skill_table(df: pd.DataFrame, price_col: str) -> pd.DataFrame:
     return pd.DataFrame(rows).set_index("predictor")
 
 
-def stage_kronos_skill(cfd_path: str, size: str, horizon: str, n_samples: int, limit: int | None, tiny: bool):
+def stage_kronos_skill(cfd_path: str, size: str, horizon: str, n_samples: int, limit: int | None, tiny: bool,
+                       context: int | None = None):
     from nq.data import load_mt_cfd
     from nq.kronos_bot.forecaster import KronosForecaster, cached_features
     regular = load_mt_cfd(cfd_path)
@@ -133,7 +134,7 @@ def stage_kronos_skill(cfd_path: str, size: str, horizon: str, n_samples: int, l
         k = make_tiny()
         cache = f"{OUT}/cache_TINY_{horizon}.parquet"
     else:
-        k = KronosForecaster(size, n_samples=n_samples)
+        k = KronosForecaster(size, n_samples=n_samples, context=context)
         cache = f"{OUT}/cache_{k.name}_{horizon}.parquet"
     horizon_n = pts[0][1]
     feats = cached_features(k, allc, [p[0] for p in pts if p[1] == horizon_n], horizon_n, cache)
@@ -162,13 +163,14 @@ def main(argv=None):
     p.add_argument("--size", default="mini", choices=["mini", "small"])
     p.add_argument("--horizon", default="last30", choices=list(HORIZONS))
     p.add_argument("--samples", type=int, default=16)
+    p.add_argument("--context", type=int, help="candles of history (default: the checkpoint's maximum)")
     p.add_argument("--limit", type=int)
     p.add_argument("--tiny", action="store_true", help="random tiny model: pipeline smoke test only")
     a = p.parse_args(argv)
     if a.stage == "signals":
         stage_signals(a.cfd)
     else:
-        stage_kronos_skill(a.cfd, a.size, a.horizon, a.samples, a.limit, a.tiny)
+        stage_kronos_skill(a.cfd, a.size, a.horizon, a.samples, a.limit, a.tiny, a.context)
 
 
 if __name__ == "__main__":

@@ -103,6 +103,18 @@ def fast_stats(r: pd.Series, d: pd.Series) -> dict:
             "total_pct": float(r.sum() * 100)}
 
 
+def fast_extra(df, r: pd.Series, d: pd.Series) -> dict:
+    """Uncertainty, drawdown and months for the fast evaluator (unit notional, returns summed)."""
+    t = r[d != 0]
+    half = 1.96 * t.std() / np.sqrt(len(t)) * 1e4 if len(t) > 1 else np.nan
+    cum = r.cumsum()
+    months = r.groupby(df["date"].dt.to_period("M")).sum()
+    return {"exp_bp_ci95_low": t.mean() * 1e4 - half, "exp_bp_ci95_high": t.mean() * 1e4 + half,
+            "max_dd_pct": float((cum - cum.cummax().clip(lower=0)).min() * 100),
+            "month_mean_pct": months.mean() * 100, "months_positive_pct": (months > 0).mean() * 100,
+            "month_worst_pct": months.min() * 100}
+
+
 def variant_returns(df, v: dict, v_ref: float, cost_mult=1.0):
     d = direction(df, v["conf"], v["move"])
     return net(df, d, vol_mult(df, v_ref) if v.get("sized") else 1.0, cost_mult), d
@@ -346,22 +358,35 @@ def main(argv=None):
         print(diag)
         return
     frozen = json.load(open(frozen_path(a.window)))
+    once = {"validate": f"{OUT}/v2_{tag}_validation.csv", "bot": f"{OUT}/v2_{tag}_bot_periods.csv"}[a.stage]
+    if os.path.exists(once):
+        raise SystemExit(f"{once} exists: this evaluation is run once (results are preserved, not overwritten)")
     if a.stage == "validate":
         va = df[df["period"] == "validation"]
-        rows = {}
+        rows, years = {}, []
         for name, v in frozen["variants"].items():
             if v is None:
                 continue
             r, d = variant_returns(va, v, frozen["v_ref"])
-            rows[name] = fast_stats(r, d)
+            rows[name] = fast_stats(r, d) | fast_extra(va, r, d)
+            for y in sorted(va["date"].dt.year.unique()):
+                m = (va["date"].dt.year == y).to_numpy()
+                years.append({"variant": name, "year": int(y), **fast_stats(r[m], d[m])})
         h3 = np.sign(va["H3"])
-        rows["H3"] = fast_stats(net(va, h3), h3)
+        rows["H3"] = fast_stats(net(va, h3), h3) | fast_extra(va, net(va, h3), h3)
         t = pd.DataFrame(rows).T
-        t.to_csv(f"{OUT}/v2_{tag}_validation.csv")
+        t.to_csv(once)
+        pd.DataFrame(years).to_csv(f"{OUT}/v2_{tag}_validation_years.csv", index=False)
         f = rows[frozen["final"]]
-        passed = f["exp_bp"] > 0 and f["pf"] > 1 and f["trades"] >= 40
+        checks = {"expectancy > 0": f["exp_bp"] > 0, "profit factor > 1": f["pf"] > 1, ">= 40 trades": f["trades"] >= 40}
+        passed = all(checks.values())
+        commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
+        with open(f"{OUT}/v2_{tag}_validation_gate.json", "w") as fh:
+            json.dump({"final_variant": frozen["final"], "checks": {k: bool(v) for k, v in checks.items()},
+                       "passed": bool(passed), "code_commit": commit, "period": PERIODS["validation"]}, fh, indent=2)
         print(t.round(3).to_string())
-        print(f"final variant {frozen['final']}: VALIDATION gate {'PASSED' if passed else 'FAILED'}")
+        print(pd.DataFrame(years).set_index(["variant", "year"])[["trades", "exp_bp", "t", "pf"]].round(2).to_string())
+        print(f"final variant {frozen['final']}: VALIDATION gate {'PASSED' if passed else 'FAILED'} {checks}")
         diag = diagnostics(df, frozen, "validation")
         with open(f"{OUT}/v2_{tag}_validation_diagnostics.txt", "w") as fh:
             fh.write(diag + "\n")

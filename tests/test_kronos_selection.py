@@ -3,8 +3,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from nq.kronos_bot.selection import (COST_PTS, assemble, bot_stats, direction, net, select, trade_returns,
-                                     vol_mult)
+from nq.kronos_bot.selection import (COST_PTS, assemble, bot_stats, direction, fast_extra, net, select,
+                                     trade_returns, vol_mult)
 
 NY = "America/New_York"
 
@@ -71,6 +71,16 @@ def test_net_books_cost_only_on_trades():
     r = net(df, d, mult=0.5)
     c = COST_PTS / 10000
     assert r.tolist() == pytest.approx([(0.01 - c) * 0.5, (-0.01 - c) * 0.5, 0.0])
+
+
+def test_fast_extra_drawdown_ci_and_months():
+    df = pd.DataFrame({"date": pd.to_datetime(["2020-01-02", "2020-01-03", "2020-02-03", "2020-02-04"])})
+    r = pd.Series([0.01, -0.03, 0.0, 0.01])
+    d = pd.Series([1.0, 1.0, 0.0, -1.0])
+    x = fast_extra(df, r, d)
+    assert x["max_dd_pct"] == pytest.approx(-3.0)                       # peak +1% -> -2%
+    assert x["month_mean_pct"] == pytest.approx((-2.0 + 1.0) / 2) and x["months_positive_pct"] == 50.0
+    assert x["exp_bp_ci95_low"] < -33.3 < x["exp_bp_ci95_high"]         # mean of the 3 trades = -33.3 bp
 
 
 def test_trade_returns_compound_and_stress():

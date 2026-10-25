@@ -56,10 +56,11 @@ def to_bars(frame: pd.DataFrame, instrument, minutes: int = BAR_MINUTES) -> list
     return BarDataWrangler(bar_type(instrument, minutes), instrument).process(data)
 
 
-def load_mt_cfd(path: str, server_tz: str = "Europe/Athens", minutes: int = 15) -> pd.DataFrame:
+def load_mt_cfd(path: str, server_tz: str = "Europe/Athens", minutes: int = 15, session: str = "regular") -> pd.DataFrame:
     """MetaTrader CFD export (tab-separated DateTime/Open/High/Low/Close/Volume/TickVolume, server
-    clock) -> regular-session candles indexed by candle CLOSE time in New York, prices rounded to
-    the 0.25 NQ tick. Tick volume is used as volume."""
+    clock) -> candles indexed by candle CLOSE time in New York, prices rounded to the 0.25 NQ tick.
+    session="regular": NYSE session only; "all": every candle (nearly 24h, e.g. model context).
+    Tick volume is used as volume."""
     import pandas_market_calendars as mcal
     d = pd.read_csv(path, sep="\t")
     idx = pd.to_datetime(d["DateTime"], format="%Y.%m.%d %H:%M:%S").dt.tz_localize(
@@ -68,6 +69,10 @@ def load_mt_cfd(path: str, server_tz: str = "Europe/Athens", minutes: int = 15) 
                        "volume": d.TickVolume.astype(float)}).set_index(pd.DatetimeIndex(idx))
     df = df[df.index.notna()].sort_index()
     df = df[~df.index.duplicated()].tz_convert("America/New_York")
+    if session == "all":
+        df.index = df.index + pd.Timedelta(minutes=minutes)
+        df.index.name = "timestamp"
+        return df
     sched = mcal.get_calendar("XNYS").schedule(start_date=df.index[0].date(), end_date=df.index[-1].date())
     keep = np.zeros(len(df), dtype=bool)
     starts = df.index.tz_convert("UTC")

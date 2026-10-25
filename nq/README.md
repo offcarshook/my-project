@@ -8,6 +8,7 @@ python -m nq.backtest --data DIR --start 2022-03-21 --end 2024-03-31   # one ORB
 python -m nq.research --data DIR orb                                    # pre-registered variants, train+val
 python -m nq.research --data DIR --out nq/results mr                    # Phase 2: mean reversion walk-forward
 python -m nq.audit --data DIR                                           # accounting reconciliation
+python -m nq.journal --data DIR                                         # ORB trade journal + report (TradeZella-style)
 python -m pytest tests/test_nq_orb.py
 ```
 
@@ -112,3 +113,15 @@ python -m nq.pairs --data DIR audit; python -m nq.pairs --data DIR stats; python
   flat. Bonferroni over 6 configs is moot: nothing is positive.
 * **Verdict: rejected.** No candidate exists to freeze; Apr 2025..Oct 2026 (previously examined)
   was not used. Files: `results/pairs_*.csv`.
+
+## ORB trade journal (`nq/journal.py`, `results/journal/`)
+
+One row per trade (`orb_journal_<period>.csv`) for the frozen 5m ORB: opening range high/low/width
+(points, ticks, vs the prior 20 sessions), breakout time and distance, ATR(14), gap vs prior close,
+prior-day trend/chop (efficiency ratio), intended vs fill price and slippage, stop, exit reason,
+hold time, commission, slippage $, gross/net P&L, R, MFE/MAE. Context fields use only candles
+completed by the entry. `report.md`: net/gross P&L, win rate, payoff, profit factor, expectancy
+($ and R), closed and **intraday mark-to-market** drawdown, streaks, Sharpe/Sortino (daily),
+monthly/yearly, and breakdowns by side, weekday, entry hour, exit reason, gap, regime and range
+width, for train / validation / later (examined) periods. Forward paper test: not started.
+The columns are generic; map them in TradeZella's CSV import (its exact template isn't assumed).

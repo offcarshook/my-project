@@ -57,6 +57,23 @@ def test_no_signal_short_signal_and_missing_entry_candle():
     assert t.empty
 
 
+def test_leverage_cap_limits_contracts():
+    t, _, _ = run([session("2026-01-05", QUIET)], [("2026-01-05", 1, 1.0)], risk_pct=5.0)
+    assert t.iloc[0].qty > 1
+    t, _, _ = run([session("2026-01-05", QUIET)], [("2026-01-05", 1, 1.0)], risk_pct=5.0, max_leverage=1.0)
+    assert t.iloc[0].qty == 1                                    # 1 x $40k notional <= 1 x $50k equity < 2
+
+
+def test_morning_entry_uses_previous_session_candles_for_atr():
+    day2 = [20000.0, 20000, 20000] + [20000 + 5 * i for i in range(1, 24)]  # 10:00 close 20000 -> rising
+    t, _, _ = run([session("2026-01-05", QUIET), session("2026-01-06", day2)], [("2026-01-06", 1, 1.0)],
+                  entry_time="10:00", exit_time="15:45")
+    assert len(t) == 1
+    tr = t.iloc[0]
+    assert tr.entry_ts.tz_convert(NY).strftime("%H:%M") == "10:00"
+    assert tr.exit_ts.tz_convert(NY).strftime("%H:%M") == "15:45" and tr.exit_kind == "market"
+
+
 def test_protective_stop_and_daily_loss_guard():
     crash = [20000.0] * 23 + [20000, 19700, 19650]
     t, _, bot = run([session("2026-01-05", crash)], [("2026-01-05", 1, 1.0)], risk_pct=1.0, stop_atr=2.0)

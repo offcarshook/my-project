@@ -156,10 +156,27 @@ def stage_kronos_skill(cfd_path: str, size: str, horizon: str, n_samples: int, l
     print(f"{tag}: {len(df)} decisions\n" + table.round(3).to_string())
 
 
+PERIODS = {"dev": DEV, "train": ("2016-11-15", "2019-12-31"), "validation": ("2020-01-01", "2021-12-31"), "oos": WF}
+
+
+def stage_forecast(cfd_path: str, size: str, horizon: str, n_samples: int, context: int | None, period: str):
+    """Fill the resumable forecast cache for one period. Prints progress only, never outcomes, so
+    forecasts for a not-yet-evaluated period can be computed ahead of time without peeking."""
+    from nq.data import load_mt_cfd
+    from nq.kronos_bot.forecaster import KronosForecaster, cached_features
+    allc = load_mt_cfd(cfd_path, session="all")
+    pts = decision_points(allc, sessions(load_mt_cfd(cfd_path)), *PERIODS[period], horizon)
+    k = KronosForecaster(size, n_samples=n_samples, context=context)
+    n = max({p[1] for p in pts}, key=[p[1] for p in pts].count)          # the usual candle count
+    feats = cached_features(k, allc, [p[0] for p in pts if p[1] == n], n, f"{OUT}/cache_{k.name}_{horizon}.parquet")
+    print(f"{k.name} {horizon} {period}: cache now holds {len(feats)} forecasts")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser()
     p.add_argument("--cfd", required=True)
-    p.add_argument("stage", choices=["signals", "kronos-skill"])
+    p.add_argument("stage", choices=["signals", "kronos-skill", "forecast"])
+    p.add_argument("--period", default="oos", choices=list(PERIODS), help="forecast stage only")
     p.add_argument("--size", default="mini", choices=["mini", "small"])
     p.add_argument("--horizon", default="last30", choices=list(HORIZONS))
     p.add_argument("--samples", type=int, default=16)
@@ -169,6 +186,8 @@ def main(argv=None):
     a = p.parse_args(argv)
     if a.stage == "signals":
         stage_signals(a.cfd)
+    elif a.stage == "forecast":
+        stage_forecast(a.cfd, a.size, a.horizon, a.samples, a.context, a.period)
     else:
         stage_kronos_skill(a.cfd, a.size, a.horizon, a.samples, a.limit, a.tiny, a.context)
 

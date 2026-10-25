@@ -4,8 +4,10 @@
 Rules (identical for every signal source, so comparisons are like-for-like):
 * at the close of the `entry_time` candle, if today's signal is non-zero and the bot is flat and
   not halted: market order in the signal's direction;
-* size = floor(equity x risk_pct x size_mult / (stop points x multiplier + cost per contract));
-* protective stop-market `stop_atr` x ATR (15-minute candles, current session) from the fill;
+* size = floor(equity x risk_pct x size_mult / (stop points x multiplier + cost per contract)),
+  capped at `max_contracts` and at `max_leverage` x equity of notional;
+* protective stop-market `stop_atr` x ATR from the fill (last `atr_period` regular-session
+  15-minute candles; a session's first candle uses its own range, so overnight gaps don't count);
 * exit at the close of the `exit_time` candle (or 10 minutes before an early close);
 * at most one trade per day; a missing entry candle means no trade that day;
 * risk guard: if equity falls `max_daily_loss_pct` below the day's starting equity, flatten and
@@ -40,6 +42,7 @@ class SessionSignalConfig(StrategyConfig, frozen=True):
     max_daily_loss_pct: float = 3.0
     max_total_dd_pct: float = 10.0
     max_contracts: int = 50
+    max_leverage: float = 0.0         # cap on notional / equity (0 = no cap)
     cost_per_contract: float = 2.7
     early_closes: tuple = ()
 
@@ -94,7 +97,6 @@ class SessionSignalBot(Strategy):
             self._start_equity = self._equity()
         if day != self._day:                                  # new session
             self._day, self._traded, self._halted_today = day, False, False
-            self._tr.clear()
             self._prev_close = None
             self._day_equity = self._equity()
         h, lo, c = float(bar.high), float(bar.low), float(bar.close)
@@ -124,6 +126,8 @@ class SessionSignalBot(Strategy):
         risk_money = eq * cfg.risk_pct / 100 * mult
         qty = int(risk_money // (stop_pts * float(self.instrument.multiplier) + cfg.cost_per_contract))
         qty = min(qty, cfg.max_contracts)
+        if cfg.max_leverage > 0:
+            qty = min(qty, int(eq * cfg.max_leverage // (c * float(self.instrument.multiplier))))
         self._traded = True                                   # one attempt per day, even if rejected
         if qty < 1:
             self.events.append({"ts": t, "event": "size below one contract"})

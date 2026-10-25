@@ -1,0 +1,22 @@
+== fast evaluator vs NautilusTrader (H3, DEV, guard-free)
+matched trades: 1115 of 1115 bot trades; same direction: 100.0%
+mean net points/contract: fast -0.859, Nautilus -0.743, difference +0.115
+entry vs 15:30 close: mean +0.250 pts (fast books 0.25 in its cost)
+market exits vs 16:00 close: mean +0.250 pts over 998 trades
+stop exits: 117 (10.5%); their Nautilus net -31.44 vs fast (held to 16:00) -32.54 pts/contract
+correlation of per-trade net (fast vs Nautilus): 0.981
+Nautilus results are contract-weighted by risk sizing; the fast evaluator is unit-notional, so R and % returns differ in scale even when per-contract points agree.
+
+== data quality
+      nyse_full_days  has_10:00  has_15:30  has_15:45  has_16:00  candles_per_day_median
+year                                                                                    
+2016              31         31         31         31         31                    26.0
+2017             249        246        211        247        247                    26.0
+2018             248        247        200        247        247                    26.0
+2019             249        248        248        248        248                    26.0
+2020             251        242        243        243        243                    26.0
+2021             251        251        251        251        251                    26.0
+2022             250        250        250        250        250                    26.0
+2023             248        248        248        248        248                    26.0
+2024             249        249        248        248        248                    26.0
+2025             185        185        185        185        185                    26.0

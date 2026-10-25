@@ -3,7 +3,8 @@
     python -m nq.backtest --data DIR --start 2022-03-21 --end 2024-03-31 [--range 15 ...]
 
 Costs: per-contract commission + exchange fees (PerContractFeeModel) and one tick of slippage
-on every market/stop fill (FillModel prob_slippage=1). A market order sent on a candle's close
+on every market/stop fill (FillModel prob_slippage=1; in bar mode NautilusTrader applies the same
+tick to limit fills, a deliberate conservative offset to touch-fills). A market order sent on a candle's close
 fills at that close plus one tick (the next trade after the close; on 5-minute NQ candles the next
 open is typically within a tick or two of it). Margin account, netting OMS."""
 import argparse
@@ -22,15 +23,18 @@ from nautilus_trader.model.objects import Money
 
 from nq.data import bar_type, load_proxy, to_bars
 from nq.instruments import VENUE, micro_future
+from nq.strategies.mean_reversion import MeanReversion, MeanReversionConfig
 from nq.strategies.orb import OpeningRangeBreakout, OrbConfig
 
 COMMISSION_PER_SIDE = 0.85     # USD per micro contract per side (broker + CME + NFA, conservative)
 STARTING_CASH = 50_000
 
 
-def run_orb(frame: pd.DataFrame, start=None, end=None, cash=STARTING_CASH, slippage_ticks=True, **params):
-    """Backtest ORB on one proxy-MNQ frame between start/end (New York dates). Returns
-    (trades DataFrame, daily equity Series)."""
+def run_strategy(strategy_cls, config_cls, frame: pd.DataFrame, start=None, end=None, cash=STARTING_CASH,
+                 slippage_ticks=True, **params):
+    """Backtest one strategy on one proxy-MNQ frame between start/end (New York dates), with the
+    same venue, fees, slippage and margin account for every strategy. Returns
+    (trades DataFrame, account equity Series)."""
     inst = micro_future("MNQ")
     sel = frame
     if start is not None:
@@ -45,8 +49,8 @@ def run_orb(frame: pd.DataFrame, start=None, end=None, cash=STARTING_CASH, slipp
                      fee_model=PerContractFeeModel(Money(COMMISSION_PER_SIDE, USD)))
     engine.add_instrument(inst)
     engine.add_data(to_bars(sel, inst))
-    strat = OpeningRangeBreakout(OrbConfig(instrument_id=inst.id, bar_type=bar_type(inst),
-                                           cost_per_contract=2 * COMMISSION_PER_SIDE + 2 * 0.5, **params))
+    strat = strategy_cls(config_cls(instrument_id=inst.id, bar_type=bar_type(inst),
+                                    cost_per_contract=2 * COMMISSION_PER_SIDE + 2 * 0.5, **params))
     engine.add_strategy(strat)
     engine.run()
     trades = pd.DataFrame(strat.trades)
@@ -54,6 +58,14 @@ def run_orb(frame: pd.DataFrame, start=None, end=None, cash=STARTING_CASH, slipp
     equity = account["total"].astype(float) if len(account) else pd.Series(dtype=float)
     engine.dispose()
     return trades, equity
+
+
+def run_orb(frame: pd.DataFrame, start=None, end=None, **params):
+    return run_strategy(OpeningRangeBreakout, OrbConfig, frame, start, end, **params)
+
+
+def run_mean_reversion(frame: pd.DataFrame, start=None, end=None, **params):
+    return run_strategy(MeanReversion, MeanReversionConfig, frame, start, end, **params)
 
 
 def summarize(trades: pd.DataFrame, cash=STARTING_CASH) -> dict:

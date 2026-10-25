@@ -1,0 +1,44 @@
+      trades   days  win_pct_net  exp_bp      t     pf  sharpe  total_pct  exp_bp_ci95_low  exp_bp_ci95_high  max_dd_pct  month_mean_pct  months_positive_pct  month_worst_pct
+A      493.0  493.0       51.724   0.579  0.223  1.039   0.160      2.856           -4.507             5.665      -9.915           0.119               41.667           -3.436
+B      302.0  493.0       49.669  -1.865 -0.583  0.881  -0.417     -5.634           -8.135             4.404      -9.273          -0.235               45.833           -2.688
+C      297.0  493.0       50.168  -1.563 -0.481  0.900  -0.344     -4.641           -7.927             4.802      -8.300          -0.193               45.833           -2.688
+C-EV   285.0  493.0       50.175  -2.084 -0.619  0.870  -0.443     -5.940           -8.686             4.517      -9.137          -0.248               41.667           -2.688
+S      285.0  493.0       50.175  -2.084 -0.619  0.870  -0.443     -5.940           -8.686             4.517      -9.137          -0.248               41.667           -2.688
+D      285.0  493.0       50.175  -0.798 -0.672  0.888  -0.480     -2.274           -3.126             1.531      -3.635          -0.095               45.833           -0.879
+H3     493.0  493.0       49.899   1.959  0.756  1.137   0.541      9.659           -3.120             7.039     -10.415           0.402               50.000           -2.969
+              trades  exp_bp     t    pf
+variant year                            
+A       2020     242    1.73  0.34  1.08
+        2021     251   -0.53 -0.33  0.94
+B       2020     144   -3.79 -0.59  0.84
+        2021     158   -0.11 -0.06  0.99
+C       2020     142   -3.28 -0.51  0.86
+        2021     155    0.01  0.01  1.00
+C-EV    2020     139   -4.11 -0.62  0.83
+        2021     146   -0.16 -0.08  0.98
+S       2020     139   -4.11 -0.62  0.83
+        2021     146   -0.16 -0.08  0.98
+D       2020     139   -1.36 -0.67  0.84
+        2021     146   -0.26 -0.20  0.96
+final variant S: VALIDATION gate FAILED {'expectancy > 0': False, 'profit factor > 1': False, '>= 40 trades': True}
+== validation: 493 decisions
+IC (Spearman vs realized): k_exp_ret +0.074, k_median_ret +0.067, k_prob_c +0.037, k_snr +0.060
+rank correlation between outputs:
+              k_exp_ret  k_median_ret  k_prob_c  k_snr
+k_exp_ret          1.00          0.97      0.90   0.94
+k_median_ret       0.97          1.00      0.90   0.92
+k_prob_c           0.90          0.90      1.00   0.96
+k_snr              0.94          0.92      0.96   1.00
+IC of k_median_ret after removing what k_exp_ret explains: -0.019
+IC of k_prob_c after removing what k_exp_ret explains: -0.067
+IC of k_snr after removing what k_exp_ret explains: -0.031
+window finished up on 49.3% of days; Kronos went long on 67.7%
+Kronos longs: n 334, hit 50.0%, net -0.14 bp, t -0.04
+Kronos shorts: n 159, hit 55.3%, net +2.09 bp, t +0.53
+always long: trades 493, net win 47.3%, net -1.49 bp/trade (t -0.58), PF 0.91, Sharpe -0.41
+H3 (existing baseline): trades 493, net win 49.9%, net +1.96 bp/trade (t +0.76), PF 1.14, Sharpe +0.54
+A in up-trend regime: trades 421, net win 51.8%, net +0.18 bp/trade (t +0.10), PF 1.02, Sharpe +0.08
+A in down-trend regime: trades 72, net win 51.4%, net +2.93 bp/trade (t +0.20), PF 1.08, Sharpe +0.38
+S (C-EV) in low-volatility tercile: trades 9, net win 11.1%, net -8.00 bp/trade (t -1.73), PF 0.26, Sharpe -5.50
+S (C-EV) in mid-volatility tercile: trades 50, net win 58.0%, net +1.50 bp/trade (t +0.80), PF 1.37, Sharpe +1.37
+S (C-EV) in high-volatility tercile: trades 226, net win 50.0%, net -2.64 bp/trade (t -0.63), PF 0.86, Sharpe -0.51

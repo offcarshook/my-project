@@ -1,0 +1,59 @@
+  kronos-mini-ctx2048-n16: 25 forecasts (at 2016-12-22 15:30:00-05:00)
+  kronos-mini-ctx2048-n16: 50 forecasts (at 2017-01-31 15:30:00-05:00)
+  kronos-mini-ctx2048-n16: 75 forecasts (at 2017-03-08 15:30:00-05:00)
+  kronos-mini-ctx2048-n16: 100 forecasts (at 2017-04-12 15:30:00-04:00)
+  kronos-mini-ctx2048-n16: 125 forecasts (at 2017-05-22 15:30:00-04:00)
+  kronos-mini-ctx2048-n16: 150 forecasts (at 2017-06-27 15:30:00-04:00)
+  kronos-mini-ctx2048-n16: 175 forecasts (at 2017-08-03 15:30:00-04:00)
+  kronos-mini-ctx2048-n16: 200 forecasts (at 2017-09-08 15:30:00-04:00)
+  kronos-mini-ctx2048-n16: 225 forecasts (at 2017-10-13 15:30:00-04:00)
+  kronos-mini-ctx2048-n16: 250 forecasts (at 2018-03-23 15:30:00-04:00)
+  kronos-mini-ctx2048-n16: 275 forecasts (at 2018-04-30 15:30:00-04:00)
+  kronos-mini-ctx2048-n16: 300 forecasts (at 2018-06-05 15:30:00-04:00)
+  kronos-mini-ctx2048-n16: 325 forecasts (at 2018-07-12 15:30:00-04:00)
+  kronos-mini-ctx2048-n16: 350 forecasts (at 2018-08-16 15:30:00-04:00)
+  kronos-mini-ctx2048-n16: 375 forecasts (at 2018-09-21 15:30:00-04:00)
+  kronos-mini-ctx2048-n16: 400 forecasts (at 2018-10-26 15:30:00-04:00)
+  kronos-mini-ctx2048-n16: 425 forecasts (at 2018-12-04 15:30:00-05:00)
+  kronos-mini-ctx2048-n16: 450 forecasts (at 2019-01-15 15:30:00-05:00)
+  kronos-mini-ctx2048-n16: 475 forecasts (at 2019-02-21 15:30:00-05:00)
+  kronos-mini-ctx2048-n16: 500 forecasts (at 2019-03-28 15:30:00-04:00)
+  kronos-mini-ctx2048-n16: 525 forecasts (at 2019-05-03 15:30:00-04:00)
+  kronos-mini-ctx2048-n16: 550 forecasts (at 2019-06-10 15:30:00-04:00)
+  kronos-mini-ctx2048-n16: 575 forecasts (at 2019-07-17 15:30:00-04:00)
+  kronos-mini-ctx2048-n16: 600 forecasts (at 2019-08-21 15:30:00-04:00)
+  kronos-mini-ctx2048-n16: 625 forecasts (at 2019-09-26 15:30:00-04:00)
+  kronos-mini-ctx2048-n16: 650 forecasts (at 2019-10-31 15:30:00-04:00)
+  kronos-mini-ctx2048-n16: 675 forecasts (at 2019-12-09 15:30:00-05:00)
+  kronos-mini-ctx2048-n16: 700 forecasts (at 2020-01-17 15:30:00-05:00)
+  kronos-mini-ctx2048-n16: 725 forecasts (at 2020-02-25 15:30:00-05:00)
+  kronos-mini-ctx2048-n16: 750 forecasts (at 2020-03-31 15:30:00-04:00)
+  kronos-mini-ctx2048-n16: 775 forecasts (at 2020-05-15 15:30:00-04:00)
+  kronos-mini-ctx2048-n16: 800 forecasts (at 2020-06-22 15:30:00-04:00)
+  kronos-mini-ctx2048-n16: 825 forecasts (at 2020-07-28 15:30:00-04:00)
+  kronos-mini-ctx2048-n16: 850 forecasts (at 2020-09-01 15:30:00-04:00)
+  kronos-mini-ctx2048-n16: 875 forecasts (at 2020-10-09 15:30:00-04:00)
+  kronos-mini-ctx2048-n16: 900 forecasts (at 2020-11-13 15:30:00-05:00)
+  kronos-mini-ctx2048-n16: 925 forecasts (at 2020-12-22 15:30:00-05:00)
+  kronos-mini-ctx2048-n16: 950 forecasts (at 2021-02-01 15:30:00-05:00)
+  kronos-mini-ctx2048-n16: 975 forecasts (at 2021-03-09 15:30:00-05:00)
+  kronos-mini-ctx2048-n16: 1000 forecasts (at 2021-04-14 15:30:00-04:00)
+  kronos-mini-ctx2048-n16: 1025 forecasts (at 2021-05-19 15:30:00-04:00)
+  kronos-mini-ctx2048-n16: 1050 forecasts (at 2021-06-24 15:30:00-04:00)
+  kronos-mini-ctx2048-n16: 1075 forecasts (at 2021-07-30 15:30:00-04:00)
+  kronos-mini-ctx2048-n16: 1100 forecasts (at 2021-09-03 15:30:00-04:00)
+  kronos-mini-ctx2048-n16: 1125 forecasts (at 2021-10-11 15:30:00-04:00)
+  kronos-mini-ctx2048-n16: 1150 forecasts (at 2021-11-15 15:30:00-05:00)
+  kronos-mini-ctx2048-n16: 1175 forecasts (at 2021-12-22 15:30:00-05:00)
+kronos-mini-ctx2048-n16_last30: 1181 decisions
+                                kind     n  hit_pct  ic_spearman  gross_bp  net_bp  t_net
+predictor                                                                                
+k_exp_ret                  direction  1181   53.429        0.089     1.659  -0.010 -0.008
+k_median_ret               direction  1181   53.006        0.083     1.071  -0.598 -0.504
+dir_H1_first_30min         direction  1181   49.619       -0.041     0.035  -1.634 -1.378
+dir_H3_prev_close_to_now   direction  1181   50.889        0.000     1.444  -0.225 -0.190
+dir_always_long            direction  1181   51.143          NaN    -0.351  -2.020 -1.703
+k_disp                    volatility  1181      NaN        0.427       NaN     NaN    NaN
+k_range                   volatility  1181      NaN        0.454       NaN     NaN    NaN
+vol_prev_day_same_window  volatility  1180      NaN        0.252       NaN     NaN    NaN
+vol_avg_20d_same_window   volatility  1171      NaN        0.411       NaN     NaN    NaN

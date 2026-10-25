@@ -30,6 +30,15 @@ from nautilus_trader.trading.strategy import Strategy
 NY = "America/New_York"
 
 
+def _flatten_time(cfg, t) -> str:
+    """flatten_at, or 10 minutes before the session's close on an early-close day."""
+    for day, close in cfg.early_closes:
+        if day == t.strftime("%Y-%m-%d"):
+            h, m = map(int, close.split(":"))
+            return min(cfg.flatten_at, f"{(h * 60 + m - 10) // 60:02d}:{(h * 60 + m - 10) % 60:02d}")
+    return cfg.flatten_at
+
+
 class MeanReversionConfig(StrategyConfig, frozen=True):
     instrument_id: InstrumentId
     bar_type: BarType
@@ -43,6 +52,7 @@ class MeanReversionConfig(StrategyConfig, frozen=True):
     first_entry: str = "10:00"
     last_entry: str = "15:00"
     flatten_at: str = "15:50"
+    early_closes: tuple = ()          # ((YYYY-MM-DD, HH:MM close), ...): flatten 10 min before those closes
     max_trades_per_day: int = 4
     er_max: float = 0.0
     vol_max: float = 0.0
@@ -139,7 +149,7 @@ class MeanReversion(Strategy):
         dev, mean = self._deviation(c, atr)
         prev_dev, self._prev_dev = self._prev_dev, dev
 
-        if hhmm >= cfg.flatten_at:
+        if hhmm >= _flatten_time(cfg, t):
             self.cancel_all_orders(cfg.instrument_id)
             self.close_all_positions(cfg.instrument_id)
             return

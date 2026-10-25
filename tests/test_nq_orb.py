@@ -60,3 +60,11 @@ def test_stop_loss_costs_about_one_r():
     gross = (tr.exit - tr.entry) * tr.qty * 2
     assert tr.pnl == pytest.approx(gross - tr.qty * (2 * COMMISSION_PER_SIDE + 0.25 * 2))   # + stop tick as cost
     assert -1.15 < tr.r < -1.0
+
+
+def test_early_close_day_is_flat_before_the_close():
+    rows = [(20000, 20050, 19950, 20000)] * 3 + [(20000, 20005, 19995, 20002), (20002, 20060, 20001, 20055)]
+    rows += [(20055, 20070, 20052, 20065)] * 37                      # session ends 13:00 (early close)
+    t, _ = run_orb(frame(day("2024-11-29", rows)), risk_pct=2.0)    # day after Thanksgiving
+    tr = t.iloc[0]
+    assert tr.exit_ts.tz_convert(NY).strftime("%H:%M") == "12:50"    # 10 minutes before the 13:00 close

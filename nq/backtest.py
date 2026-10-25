@@ -54,6 +54,8 @@ def run_strategy(strategy_cls, config_cls, frame: pd.DataFrame, start=None, end=
     engine.add_data(to_bars(sel, inst, bar_minutes))
     if bar_minutes != 5:
         params["bar_minutes"] = bar_minutes
+    if "early_closes" in getattr(config_cls, "__struct_fields__", ()):
+        params.setdefault("early_closes", early_closes(sel))
     strat = strategy_cls(config_cls(instrument_id=inst.id, bar_type=bar_type(inst, bar_minutes),
                                     cost_per_contract=2 * COMMISSION_PER_SIDE + 2 * 0.5, **params))
     engine.add_strategy(strat)
@@ -63,6 +65,21 @@ def run_strategy(strategy_cls, config_cls, frame: pd.DataFrame, start=None, end=
     equity = account["total"].astype(float) if len(account) else pd.Series(dtype=float)
     engine.dispose()
     return trades, equity
+
+
+def early_closes(frame: pd.DataFrame) -> tuple:
+    """NYSE early-close sessions in the frame's date range, as ((date, "HH:MM" New York), ...)."""
+    if frame.empty:
+        return ()
+    try:
+        import pandas_market_calendars as mcal
+    except ImportError:                                   # without the calendar: flatten_at only
+        return ()
+    loc = frame.index.tz_convert("America/New_York")
+    sched = mcal.get_calendar("XNYS").schedule(start_date=loc[0].date(), end_date=loc[-1].date())
+    closes = sched.market_close.dt.tz_convert("America/New_York")
+    early = closes[closes.dt.strftime("%H:%M") < "16:00"]
+    return tuple((d.strftime("%Y-%m-%d"), c.strftime("%H:%M")) for d, c in zip(early.index, early))
 
 
 def run_orb(frame: pd.DataFrame, start=None, end=None, **params):

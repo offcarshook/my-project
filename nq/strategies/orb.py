@@ -24,12 +24,22 @@ from nautilus_trader.trading.strategy import Strategy
 NY = "America/New_York"
 
 
+def _flatten_time(cfg, t) -> str:
+    """flatten_at, or 10 minutes before the session's close on an early-close day."""
+    for day, close in cfg.early_closes:
+        if day == t.strftime("%Y-%m-%d"):
+            h, m = map(int, close.split(":"))
+            return min(cfg.flatten_at, f"{(h * 60 + m - 10) // 60:02d}:{(h * 60 + m - 10) % 60:02d}")
+    return cfg.flatten_at
+
+
 class OrbConfig(StrategyConfig, frozen=True):
     instrument_id: InstrumentId
     bar_type: BarType
     range_minutes: int = 15
     last_entry: str = "11:30"         # candle close time; later breakouts are ignored
     flatten_at: str = "15:50"
+    early_closes: tuple = ()          # ((YYYY-MM-DD, HH:MM close), ...): flatten 10 min before those closes
     risk_pct: float = 0.5
     buffer_atr: float = 0.0
     atr_period: int = 14
@@ -75,7 +85,7 @@ class OpeningRangeBreakout(Strategy):
         close, high, low = float(bar.close), float(bar.high), float(bar.low)
         need = self.config.range_minutes // self.config.bar_minutes
 
-        if hhmm >= self.config.flatten_at:
+        if hhmm >= _flatten_time(self.config, t):
             self.cancel_all_orders(self.config.instrument_id)
             self.close_all_positions(self.config.instrument_id)
             return

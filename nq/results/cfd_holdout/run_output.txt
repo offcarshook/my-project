@@ -1,0 +1,41 @@
+
+== HOLDOUT 2016-11..2022-03 (never used) ==
+  trades                 1166
+  trades_per_day         1.101
+  win_pct                43.568
+  profit_factor          0.977
+  expectancy_r           -0.004
+  r_tstat                -0.108
+  net_return_pct         -4.917
+  max_drawdown_pct       -12.877
+  month_mean_pct         -0.065
+  months_positive_pct    49.231
+  engine vs log gap $ 0.0 | exits {'market': 692, 'stop': 474} | trades held overnight: 7
+           n  mean_r     pnl
+exit_ts                     
+2016      32   0.085   642.2
+2017     220  -0.082 -3773.2
+2018     256   0.031  1616.4
+2019     243  -0.010  -550.7
+2020     196  -0.038 -1802.1
+2021     200   0.039   522.0
+2022      19   0.273   886.7
+
+== comparison 2022-03..2025-10 (examined via QQQ proxy) ==
+  trades                 737
+  trades_per_day         1.122
+  win_pct                45.726
+  profit_factor          1.147
+  expectancy_r           0.071
+  r_tstat                1.555
+  net_return_pct         21.966
+  max_drawdown_pct       -5.689
+  month_mean_pct         0.481
+  months_positive_pct    60.465
+  engine vs log gap $ 0.0 | exits {'market': 427, 'stop': 310} | trades held overnight: 6
+           n  mean_r     pnl
+exit_ts                     
+2022     112   0.153  3943.4
+2023     252   0.034  1728.2
+2024     229   0.117  5627.2
+2025     144   0.000  -315.9

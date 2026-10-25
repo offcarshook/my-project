@@ -1,0 +1,8 @@
+{
+  "variant": "5m range",
+  "params": {"range_minutes": 5},
+  "risk_pct": 0.5,
+  "chosen_on": "train 2022-03-21..2024-03-31 and validation 2024-04-01..2025-03-31 only (best weaker-period t-stat of 6 pre-set variants)",
+  "frozen_on": "2026-10-25",
+  "caveat": "MNQ is proxied from QQQ; QQQ's Apr 2025-Oct 2026 data was already used in the ETF ORB study"
+}

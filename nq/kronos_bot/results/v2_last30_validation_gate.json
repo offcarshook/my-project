@@ -1,0 +1,14 @@
+{
+  "final_variant": "S",
+  "checks": {
+    "expectancy > 0": false,
+    "profit factor > 1": false,
+    ">= 40 trades": true
+  },
+  "passed": false,
+  "code_commit": "70638a2",
+  "period": [
+    "2020-01-01",
+    "2021-12-31"
+  ]
+}

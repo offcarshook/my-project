@@ -10,7 +10,7 @@ Protocol: `PROTOCOL_v2.md` (commit 3418940, written before any filter result). P
 | validation reporting (no rule change) | 70638a2 | run-once guards |
 | **15:30 VALIDATION gate** | 2b1105a | **FAILED** |
 | audits (evaluator vs Nautilus, data quality) | 3b3e990 | evaluator slightly conservative; 2017-18 data gaps |
-| 10:00 window | see section 6 | |
+| **10:00 window, TRAIN diagnostic** | see section 6 | **REJECTED** (IC -0.021, best cell Sharpe -0.04) |
 
 ## 1. Model and data checks
 * Genuine pretrained weights: NeoQuasar/Kronos-mini (4,108,032 parameters, matches the published
@@ -89,11 +89,72 @@ candidate did not pass.
   before the time exit (bar replay O->H->L->C, conservative). Ambiguity cannot flatter results.
 * Look-ahead: see section 1. No validation or later data entered any choice.
 
-## 6. 10:00 -> 15:45 window
-Pending (TRAIN forecasts running; pre-registered rejection rule: unfiltered TRAIN IC <= 0 or best
-TRAIN cell Sharpe <= 0).
+## 6. 10:00 -> 15:45 window: REJECTED at the TRAIN diagnostic
+Kronos-mini, 512-candle context (fixed before any result, for compute), 682 TRAIN decisions.
+* Unfiltered IC -0.021 (mean), -0.032 (median); EV slope b = -0.106 (C-EV therefore takes no trades).
+* All 20 grid cells lose after costs; best Sharpe -0.044 (conf 4/16, move 2x cost, 280 trades,
+  -0.32 bp/trade). Unfiltered A: -1.98 bp/trade, PF 0.92, -13.5% summed.
+* Both pre-registered rejection conditions hold, so no VALIDATION/OOS forecasts were computed and
+  the window was not combined with anything (`results/v2_rest_of_day_frozen.json`,
+  `train_diagnostic_rejected: true`).
 
-## 7. Not done, and why
+## 7. Cost stress and losing periods (fast evaluator, reporting only)
+Net bp/trade at 1x / 1.5x / 2x the round-trip cost (`results/v2_last30_cost_stress_fast.csv`):
+
+| | TRAIN 1x | 1.5x | 2x | VALIDATION 1x | 1.5x | 2x |
+|---|---|---|---|---|---|---|
+| A | -0.43 | -1.46 | -2.48 | +0.58 | +0.01 | -0.56 |
+| S | +1.87 | +0.90 | -0.08 | -2.08 | -2.65 | -3.22 |
+| D | +0.93 | +0.18 | -0.57 | -0.80 | -1.11 | -1.43 |
+| H3 | -1.79 | -2.82 | -3.84 | +1.96 | +1.39 | +0.82 |
+
+Losing periods (`results/v2_last30_losing_periods_fast.csv`): S lost in 2016, 2017 (TRAIN), 2020
+and 2021 (VALIDATION); its VALIDATION drawdown ran from 2020-03-20 to 2021-09-17 (-9.1% of unit
+notional) and never recovered; 14 of 24 VALIDATION months were negative, the longest losing run
+4 months. A's worst stretch was the COVID crash (2020-03-20 .. 2020-04-17, -9.9%). H3, the
+pre-Kronos baseline, lost in every TRAIN year and was positive but insignificant in VALIDATION.
+
+## 8. Not done, and why
 * 2022-2025 out-of-sample and NautilusTrader A-D evaluation for 15:30: gate failed (protocol).
-* Portfolio (E): requires two strategies that pass their gates.
+* 10:00 VALIDATION/OOS: rejected on TRAIN.
+* Portfolio (E): requires two strategies that pass their gates; none did.
+* RESERVED (2025-08 .. 2026-10): unused, still available for a single future test.
 * ES / gold: no verified futures data, contract specifications or cost data here.
+
+## 9. Answers
+1. **Repeatable predictive edge after costs?** No. Kronos-mini's 15:30 direction has a small
+   positive rank correlation with the next 30 minutes (IC +0.106 TRAIN, +0.074 VALIDATION), but
+   it does not cover costs reliably: unfiltered -0.43 / +0.58 bp per trade with intervals spanning
+   zero. Its 10:00 forecasts show no skill at all (IC -0.02).
+2. **Does filtering weak forecasts help?** No. The filters kept 34-63% of days and improved TRAIN
+   expectancy, but every filtered variant was negative in VALIDATION (-0.8 to -2.1 bp) while the
+   unfiltered signal stayed about flat: the TRAIN improvement was noise selection.
+3. **Does volatility-adjusted sizing improve drawdowns without adding risk?** It reduces
+   drawdown (VALIDATION -3.6% vs -9.1% on the same trades) because it only ever cuts exposure, but
+   it lowered TRAIN Sharpe and cannot rescue a signal without an edge. Volatility regimes did not
+   predict better performance consistently (high volatility helped in TRAIN, hurt in VALIDATION).
+4. **Does combining strategies help?** Not testable honestly: neither window passed its gate, and
+   combining two failed components would only disguise them.
+5. **Is 5-8% per month supported?** No. Nothing tested has a validated positive expectancy after
+   costs, and even the in-sample best (+1.9 bp/trade on about a third of days) would be a few
+   tenths of a percent per month at sane leverage.
+6. **Strongest validated configuration?** None. The strongest *candidate*, S (EV filter at 15:30),
+   failed validation. The bot, risk guards, leverage cap, fills and evaluators work and are tested;
+   the missing piece is a signal.
+7. **Most valuable next experiment:** section 10.
+
+## 10. Proposed next experiment (fixed now, evaluated only on data that does not exist in this repo yet)
+Question: is Kronos-mini's small 15:30 direction skill real (it was positive in TRAIN and
+VALIDATION) or memorisation of data it was pretrained on? Only post-release data can tell.
+* Data: a like-for-like CFD15 export from the same MetaTrader source covering 2025-10-01 onward,
+  plus forward sessions logged daily from now on (shadow mode: forecasts recorded at 15:30 before
+  the outcome, no orders). Period: 2025-08-01 .. as far as the data reach (RESERVED + forward).
+* Signal: exactly variant A as already frozen (sign of the mean of 16 samples, context 2048,
+  seed 0). No filters, no new thresholds, no tuning.
+* Measures: Spearman IC of `k_exp_ret` vs the realized 15:30->16:00 return with a 95% interval;
+  net bp per trade at 1x and 1.5x cost; move-size IC of `k_range` vs the 20-session baseline.
+* Decision rule: continue Kronos-based trading research only if IC > 0 with its 95% interval
+  excluding zero AND net bp/trade > 0 at 1x cost. Otherwise drop Kronos-mini direction for this
+  market. Power caveat: about 300 sessions (RESERVED alone) only resolve IC >= 0.11, so a true IC
+  near 0.07 needs roughly 800 unseen sessions, i.e. RESERVED plus about two years of forward data.
+

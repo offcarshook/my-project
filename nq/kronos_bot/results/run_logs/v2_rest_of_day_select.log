@@ -1,0 +1,85 @@
+     conf  move  filters  trades  days  win_pct_net  exp_bp      t     pf  sharpe  total_pct
+0     NaN   0.0        0     682   682       49.853  -1.980 -0.677  0.923  -0.412    -13.504
+1     NaN   0.5        1     638   682       49.216  -2.594 -0.844  0.902  -0.513    -16.550
+2     NaN   1.0        1     600   682       48.500  -3.896 -1.229  0.857  -0.747    -23.373
+3     NaN   2.0        1     524   682       47.901  -4.698 -1.360  0.834  -0.827    -24.616
+4   0.062   0.0        1     567   682       48.854  -3.394 -1.126  0.869  -0.685    -19.246
+5   0.062   0.5        2     551   682       48.457  -3.840 -1.252  0.853  -0.761    -21.157
+6   0.062   1.0        2     532   682       47.744  -5.161 -1.663  0.808  -1.010    -27.458
+7   0.062   2.0        2     483   682       47.412  -4.974 -1.496  0.819  -0.909    -24.026
+8   0.125   0.0        1     500   682       47.000  -5.636 -1.726  0.793  -1.048    -28.182
+9   0.125   0.5        2     492   682       47.154  -5.571 -1.684  0.796  -1.023    -27.409
+10  0.125   1.0        2     482   682       46.888  -6.528 -1.976  0.764  -1.200    -31.467
+11  0.125   2.0        2     444   682       46.622  -6.229 -1.782  0.779  -1.082    -27.655
+12  0.188   0.0        1     409   682       47.677  -4.795 -1.307  0.826  -0.794    -19.613
+13  0.188   0.5        2     406   682       48.030  -4.736 -1.281  0.828  -0.778    -19.227
+14  0.188   1.0        2     404   682       48.020  -4.829 -1.300  0.826  -0.790    -19.511
+15  0.188   2.0        2     380   682       47.368  -5.055 -1.289  0.823  -0.783    -19.208
+16  0.250   0.0        1     290   682       48.966  -0.534 -0.124  0.979  -0.076     -1.548
+17  0.250   0.5        2     289   682       49.135  -0.471 -0.109  0.981  -0.067     -1.363
+18  0.250   1.0        2     289   682       49.135  -0.471 -0.109  0.981  -0.067     -1.363
+19  0.250   2.0        2     280   682       48.929  -0.319 -0.072  0.987  -0.044     -0.893
+{
+ "variants": {
+  "A": {
+   "conf": null,
+   "move": 0.0
+  },
+  "B": {
+   "conf": 0.25,
+   "move": 0.0
+  },
+  "C": {
+   "conf": 0.25,
+   "move": 2.0
+  },
+  "C-EV": {
+   "conf": 0.25,
+   "move": Infinity
+  },
+  "S": {
+   "conf": 0.25,
+   "move": 2.0,
+   "source": "C"
+  },
+  "D": {
+   "conf": 0.25,
+   "move": 2.0,
+   "source": "C",
+   "sized": true
+  }
+ },
+ "final": "S",
+ "ev_slope_b": -0.10576898270506556,
+ "v_ref": 0.004155988304617668,
+ "train_ic": -0.021128740877377605,
+ "train_diagnostic_rejected": true
+}
+      trades   days  win_pct_net  exp_bp      t     pf  sharpe  total_pct
+A      682.0  682.0       49.853  -1.980 -0.677  0.923  -0.412    -13.504
+B      290.0  682.0       48.966  -0.534 -0.124  0.979  -0.076     -1.548
+C      280.0  682.0       48.929  -0.319 -0.072  0.987  -0.044     -0.893
+C-EV     0.0  682.0          NaN     NaN    NaN    NaN     NaN      0.000
+S      280.0  682.0       48.929  -0.319 -0.072  0.987  -0.044     -0.893
+D      280.0  682.0       48.929  -1.225 -0.393  0.938  -0.239     -3.429
+== train: 682 decisions
+IC (Spearman vs realized): k_exp_ret -0.021, k_median_ret -0.032, k_prob_c -0.009, k_snr -0.011
+rank correlation between outputs:
+              k_exp_ret  k_median_ret  k_prob_c  k_snr
+k_exp_ret          1.00          0.95      0.90   0.96
+k_median_ret       0.95          1.00      0.93   0.91
+k_prob_c           0.90          0.93      1.00   0.94
+k_snr              0.96          0.91      0.94   1.00
+IC of k_median_ret after removing what k_exp_ret explains: -0.037
+IC of k_prob_c after removing what k_exp_ret explains: +0.023
+IC of k_snr after removing what k_exp_ret explains: +0.032
+window finished up on 56.5% of days; Kronos went long on 50.7%
+Kronos longs: n 346, hit 56.1%, net -2.40 bp, t -0.57
+Kronos shorts: n 336, hit 43.5%, net -1.55 bp, t -0.38
+always long: trades 682, net win 54.1%, net -2.48 bp/trade (t -0.85), PF 0.90, Sharpe -0.52
+H3 (existing baseline): trades 682, net win 46.5%, net -3.11 bp/trade (t -1.06), PF 0.88, Sharpe -0.65
+A in up-trend regime: trades 514, net win 50.8%, net -1.23 bp/trade (t -0.44), PF 0.94, Sharpe -0.31
+A in down-trend regime: trades 118, net win 41.5%, net -7.34 bp/trade (t -0.64), PF 0.85, Sharpe -0.94
+S (C) in low-volatility tercile: trades 92, net win 54.3%, net -1.77 bp/trade (t -0.33), PF 0.91, Sharpe -0.36
+S (C) in mid-volatility tercile: trades 96, net win 50.0%, net +0.55 bp/trade (t +0.08), PF 1.02, Sharpe +0.09
+S (C) in high-volatility tercile: trades 89, net win 42.7%, net +0.65 bp/trade (t +0.06), PF 1.02, Sharpe +0.06

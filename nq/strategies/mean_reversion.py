@@ -209,7 +209,9 @@ class MeanReversion(Strategy):
         if "risk" not in p:
             return
         pnl = float(event.realized_pnl)
-        self.trades.append({"entry_ts": p["opened"], "exit_ts": pd.Timestamp(event.ts_event, tz="UTC"),
+        closing = self.cache.order(event.closing_order_id)
+        kind = {"LIMIT": "target", "STOP_MARKET": "stop"}.get(closing.order_type.name, "market") if closing else "?"
+        self.trades.append({"exit_kind": kind, "entry_ts": p["opened"], "exit_ts": pd.Timestamp(event.ts_event, tz="UTC"),
                             "side": "LONG" if p["side"] == OrderSide.BUY else "SHORT", "qty": p["qty"],
                             "entry": p["entry"], "exit": float(event.avg_px_close), "stop": p["stop"],
                             "target": p["target"], "pnl": pnl, "risk": p["risk"], "r": pnl / p["risk"]})

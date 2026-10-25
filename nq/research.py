@@ -11,7 +11,8 @@ import itertools
 
 import numpy as np
 
-from nq.backtest import run_mean_reversion, run_orb, summarize
+from nq.backtest import COMMISSION_PER_SIDE, run_mean_reversion, run_orb, summarize
+from nq.execution import conservative_adjust
 from nq.data import load_proxy
 
 warnings.filterwarnings("ignore")
@@ -72,10 +73,14 @@ def r_stats(r: pd.Series) -> dict:
             "t": r.mean() / (r.std() / np.sqrt(n)) if n > 2 and r.std() > 0 else np.nan}
 
 
-def stage_mr(frame, out_dir=None):
+def stage_mr(frame, out_dir=None, conservative=False):
+    """conservative=True re-books target exits on bars that also reached the stop as stop-outs
+    (nq/execution.conservative_adjust) before any statistic or walk-forward selection."""
     runs = {}
     for name, params in MR_GRID.items():
         t, _ = run_mean_reversion(frame, *RESEARCH_SPAN, **params)
+        if conservative:
+            t = conservative_adjust(t, frame, 2.0, COMMISSION_PER_SIDE)
         t["block"] = t["entry_ts"].map(block_of)
         runs[name] = t
         per = [r_stats(t.loc[t.block == b, "r"])["mean_r"] for b in range(len(BLOCKS))]
@@ -124,17 +129,49 @@ def stage_mr(frame, out_dir=None):
     return picks, stab, final
 
 
+def stage_reproduce(frame, out_dir):
+    """Re-run every reported NQ result under the audited execution model into a NEW folder."""
+    import json
+    import os
+
+    from nq.audit import audit, execution_stats
+    os.makedirs(out_dir, exist_ok=True)
+    print("== ORB variants, train + validation ==")
+    stage_orb(frame, f"{out_dir}/orb_variants_train_val.csv")
+    print("\n== frozen 5m ORB, Apr 2025..Oct 2026 (previously examined) ==")
+    trades, equity = run_orb(frame, "2025-04-01", "2026-10-21", range_minutes=5, risk_pct=0.5)
+    rep = audit(trades, equity, 0.5)
+    for k, v in rep.items():
+        print(f"  {k:36s} {v}")
+    trades.to_csv(f"{out_dir}/orb_frozen_late_trades.csv", index=False)
+    print("\n== mean reversion walk-forward, engine fills ==")
+    stage_mr(frame, out_dir=None)
+    print("\n== mean reversion walk-forward, conservative (ambiguous bars re-booked as stops) ==")
+    picks, stab, final = stage_mr(frame, out_dir=None, conservative=True)
+    picks.to_csv(f"{out_dir}/mr_walkforward_picks_conservative.csv", index=False)
+    stab.to_csv(f"{out_dir}/mr_stability_conservative.csv")
+    print("\n== execution statistics ==")
+    ex = execution_stats(frame)
+    for k, v in ex.items():
+        print(f"  {k:44s} {v}")
+    with open(f"{out_dir}/summary.json", "w") as fh:
+        json.dump({"orb_frozen_late": {k: (float(v) if isinstance(v, (int, float)) else v) for k, v in rep.items()},
+                   "execution": ex}, fh, indent=2, default=str)
+
+
 def main(argv=None):
     p = argparse.ArgumentParser()
     p.add_argument("--data", required=True)
     p.add_argument("--out")
-    p.add_argument("stage", choices=["orb", "mr"])
+    p.add_argument("stage", choices=["orb", "mr", "reproduce"])
     a = p.parse_args(argv)
     frame = load_proxy(a.data, ("MNQ",))["MNQ"]
     if a.stage == "orb":
         stage_orb(frame, a.out)
-    else:
+    elif a.stage == "mr":
         stage_mr(frame, a.out)
+    else:
+        stage_reproduce(frame, a.out or "nq/results/execution_audit")
 
 
 if __name__ == "__main__":

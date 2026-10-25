@@ -43,7 +43,23 @@ def audit(trades: pd.DataFrame, account_equity: pd.Series, risk_pct: float, cash
     peak = eq.cummax().clip(lower=cash)
     out["max_drawdown_closed_pct"] = ((eq - peak) / peak).min() * 100
     out["summarize_max_drawdown_pct"] = summarize(trades, cash)["max_drawdown_pct"]
+    if "exit_kind" in t:
+        out["exits"] = t["exit_kind"].value_counts().to_dict()
     return out
+
+
+def execution_stats(frame: pd.DataFrame, tick: float = 0.25) -> dict:
+    """How far is the next candle's open from the close a market order fills at? (Orders sent
+    from on_bar fill at that bar's close + slippage; a real order would reach the market a moment
+    later.) Same-session pairs only."""
+    day = frame.index.tz_convert(NY).date
+    same = pd.Series(day[1:] == day[:-1])
+    gap = (frame["open"].to_numpy()[1:] - frame["close"].to_numpy()[:-1])[same.to_numpy()]
+    ticks = np.abs(gap) / tick
+    return {"close_to_next_open_median_ticks": float(np.median(ticks)),
+            "close_to_next_open_p90_ticks": float(np.quantile(ticks, 0.9)),
+            "close_to_next_open_mean_ticks": float(ticks.mean()),
+            "share_within_1_tick": float((ticks <= 1).mean())}
 
 
 def main(argv=None):

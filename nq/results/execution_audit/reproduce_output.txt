@@ -1,0 +1,140 @@
+== ORB variants, train + validation ==
+baseline 15m range, range stop, hold   train trades  518 (1.24/day) R +0.058 t +0.98 ret  +11.1% DD   -5.8% month avg +0.44%
+baseline 15m range, range stop, hold   val   trades  245 (1.22/day) R +0.287 t +2.72 ret  +30.2% DD   -6.7% month avg +2.27%
+5m range                               train trades  628 (1.39/day) R +0.130 t +1.89 ret  +30.3% DD   -6.4% month avg +1.11%
+5m range                               val   trades  262 (1.39/day) R +0.223 t +1.82 ret  +25.9% DD   -5.7% month avg +1.99%
+30m range                              train trades  348 (1.13/day) R +0.005 t +0.09 ret   +0.1% DD   -8.1% month avg +0.02%
+30m range                              val   trades  160 (1.10/day) R +0.288 t +2.57 ret  +17.8% DD   -4.7% month avg +1.40%
+breakout +0.25 ATR                     train trades  450 (1.14/day) R +0.099 t +1.71 ret  +18.2% DD   -4.8% month avg +0.68%
+breakout +0.25 ATR                     val   trades  210 (1.15/day) R +0.232 t +2.12 ret  +19.9% DD   -5.1% month avg +1.55%
+last entry 10:30                       train trades  431 (1.11/day) R +0.073 t +1.10 ret  +12.9% DD   -4.1% month avg +0.50%
+last entry 10:30                       val   trades  218 (1.12/day) R +0.353 t +3.08 ret  +36.5% DD   -5.4% month avg +2.67%
+2R target                              train trades  516 (1.24/day) R +0.071 t +1.33 ret  +14.0% DD   -3.4% month avg +0.54%
+2R target                              val   trades  236 (1.23/day) R +0.252 t +2.95 ret  +21.4% DD   -3.4% month avg +1.65%
+
+== frozen 5m ORB, Apr 2025..Oct 2026 (previously examined) ==
+  trades                               352
+  final_equity_from_trades             49329.4
+  final_equity_from_engine             49329.4
+  equity_gap_usd                       0.0
+  cumulative_return_pct                -1.341199999999998
+  compounded_monthly_pct               -1.3411999999999757
+  arithmetic_mean_month_pct            -0.042374684057794654
+  geometric_mean_month_pct             -0.07104187561985942
+  risk_setting_pct                     0.5
+  risk_taken_median_pct                0.3778131649920623
+  risk_taken_p10_p90_pct               0.28-0.47
+  stopped_loss_median_pct_of_equity    0.3912544760368928
+  max_drawdown_closed_pct              -7.954437662491023
+  summarize_max_drawdown_pct           -7.954437662491023
+  exits                                {'stop': 210, 'market': 142}
+
+== mean reversion walk-forward, engine fills ==
+vwap k=1.5 no gates                trades  1165  R by 6-month block: +0.03 -0.08 -0.14 -0.07 -0.07 -0.08
+vwap k=1.5 trend+vol gates         trades   720  R by 6-month block: +0.02 -0.16 -0.25 +0.05 +0.03 -0.07
+vwap k=2.0 no gates                trades  1367  R by 6-month block: +0.02 -0.02 -0.10 -0.07 -0.02 -0.12
+vwap k=2.0 trend+vol gates         trades   875  R by 6-month block: +0.04 -0.05 -0.08 +0.02 -0.01 -0.17
+vwap k=2.5 no gates                trades  1233  R by 6-month block: -0.07 -0.05 -0.06 +0.02 -0.06 -0.15
+vwap k=2.5 trend+vol gates         trades   800  R by 6-month block: +0.00 -0.09 -0.00 +0.10 +0.03 -0.18
+zscore k=1.5 no gates              trades  1772  R by 6-month block: -0.06 -0.07 -0.15 -0.18 -0.06 -0.06
+zscore k=1.5 trend+vol gates       trades   712  R by 6-month block: -0.06 -0.07 -0.05 -0.07 +0.18 -0.08
+zscore k=2.0 no gates              trades  1237  R by 6-month block: -0.11 -0.15 -0.10 -0.09 -0.02 -0.06
+zscore k=2.0 trend+vol gates       trades   410  R by 6-month block: -0.19 -0.17 -0.04 +0.06 +0.02 +0.01
+zscore k=2.5 no gates              trades   440  R by 6-month block: +0.01 -0.27 -0.03 -0.28 -0.16 -0.22
+zscore k=2.5 trend+vol gates       trades   115  R by 6-month block: +0.09 -0.25 +0.24 -0.31 +0.01 -0.16
+atr_ema k=1.5 no gates             trades  1182  R by 6-month block: -0.11 -0.10 -0.09 -0.11 -0.10 -0.07
+atr_ema k=1.5 trend+vol gates      trades   700  R by 6-month block: -0.04 -0.19 -0.10 -0.10 -0.05 -0.05
+atr_ema k=2.0 no gates             trades  1279  R by 6-month block: -0.15 -0.15 -0.15 -0.20 -0.12 -0.12
+atr_ema k=2.0 trend+vol gates      trades   576  R by 6-month block: -0.15 -0.14 -0.05 -0.20 -0.06 -0.05
+atr_ema k=2.5 no gates             trades   942  R by 6-month block: -0.16 -0.22 -0.12 -0.14 -0.18 -0.20
+atr_ema k=2.5 trend+vol gates      trades   250  R by 6-month block: -0.12 -0.13 +0.14 -0.15 +0.04 +0.04
+
+walk-forward picks:
+            test_block                         pick  train_t  oos_n  oos_mean_r  oos_t  orb_n  orb_mean_r  orb_t
+2023-04-01..2023-09-30            (none: no trades)      NaN      0         NaN    NaN    143       0.256  1.644
+2023-10-01..2024-03-31 zscore k=2.5 trend+vol gates    0.268     14      -0.314 -1.278    141       0.065  0.511
+2024-04-01..2024-09-30   vwap k=2.5 trend+vol gates    0.663    143       0.031  0.352    137       0.284  1.547
+2024-10-01..2025-03-31 zscore k=1.5 trend+vol gates    0.951    128      -0.082 -0.957    136       0.127  0.845
+
+OOS pooled  mean-reversion WF: {'n': 285, 'mean_r': np.float64(-0.037), 't': np.float64(-0.61)} | frozen ORB same blocks: {'n': 557, 'mean_r': np.float64(0.183), 't': np.float64(2.361)}
+
+stability (mean R per 6-month block):
+                                  B1     B2     B3     B4     B5     B6  blocks_positive  all_r  all_t
+atr_ema k=2.5 trend+vol gates -0.122 -0.127  0.138 -0.152  0.041  0.036                3 -0.022 -0.334
+zscore k=2.5 trend+vol gates   0.089 -0.250  0.243 -0.314  0.006 -0.156                3 -0.045 -0.460
+vwap k=2.5 trend+vol gates     0.003 -0.095 -0.000  0.096  0.031 -0.184                3 -0.026 -0.708
+zscore k=1.5 trend+vol gates  -0.064 -0.067 -0.053 -0.075  0.180 -0.082                1 -0.026 -0.717
+zscore k=2.0 trend+vol gates  -0.195 -0.170 -0.035  0.058  0.019  0.012                3 -0.058 -1.163
+vwap k=2.0 trend+vol gates     0.040 -0.054 -0.077  0.019 -0.010 -0.169                2 -0.044 -1.338
+vwap k=1.5 trend+vol gates     0.020 -0.160 -0.247  0.048  0.026 -0.068                3 -0.065 -1.933
+vwap k=2.0 no gates            0.015 -0.017 -0.098 -0.068 -0.020 -0.122                1 -0.052 -1.975
+vwap k=2.5 no gates           -0.068 -0.054 -0.061  0.019 -0.056 -0.153                1 -0.064 -2.156
+atr_ema k=1.5 trend+vol gates -0.037 -0.190 -0.104 -0.101 -0.052 -0.052                0 -0.088 -2.557
+vwap k=1.5 no gates            0.028 -0.084 -0.142 -0.066 -0.066 -0.079                1 -0.069 -2.614
+atr_ema k=2.0 trend+vol gates -0.151 -0.138 -0.054 -0.205 -0.065 -0.047                0 -0.106 -2.630
+zscore k=2.5 no gates          0.013 -0.274 -0.030 -0.281 -0.164 -0.217                1 -0.157 -2.873
+zscore k=2.0 no gates         -0.114 -0.146 -0.104 -0.089 -0.019 -0.056                0 -0.090 -2.904
+atr_ema k=1.5 no gates        -0.115 -0.102 -0.092 -0.114 -0.096 -0.066                0 -0.098 -3.624
+zscore k=1.5 no gates         -0.063 -0.073 -0.148 -0.185 -0.062 -0.065                0 -0.100 -4.072
+atr_ema k=2.5 no gates        -0.161 -0.218 -0.119 -0.144 -0.181 -0.202                0 -0.171 -4.994
+atr_ema k=2.0 no gates        -0.155 -0.145 -0.147 -0.200 -0.120 -0.124                0 -0.148 -5.345
+
+walk-forward pick for the next period (trained on the last 12 months): zscore k=1.5 trend+vol gates
+
+== mean reversion walk-forward, conservative (ambiguous bars re-booked as stops) ==
+vwap k=1.5 no gates                trades  1165  R by 6-month block: +0.03 -0.08 -0.14 -0.07 -0.07 -0.08
+vwap k=1.5 trend+vol gates         trades   720  R by 6-month block: +0.02 -0.16 -0.25 +0.05 +0.03 -0.07
+vwap k=2.0 no gates                trades  1367  R by 6-month block: +0.02 -0.02 -0.11 -0.07 -0.02 -0.12
+vwap k=2.0 trend+vol gates         trades   875  R by 6-month block: +0.04 -0.05 -0.09 +0.02 -0.01 -0.17
+vwap k=2.5 no gates                trades  1233  R by 6-month block: -0.07 -0.05 -0.07 +0.02 -0.06 -0.15
+vwap k=2.5 trend+vol gates         trades   800  R by 6-month block: +0.00 -0.09 -0.02 +0.10 +0.03 -0.18
+zscore k=1.5 no gates              trades  1772  R by 6-month block: -0.06 -0.07 -0.15 -0.18 -0.06 -0.06
+zscore k=1.5 trend+vol gates       trades   712  R by 6-month block: -0.06 -0.07 -0.05 -0.07 +0.18 -0.08
+zscore k=2.0 no gates              trades  1237  R by 6-month block: -0.11 -0.15 -0.10 -0.09 -0.02 -0.06
+zscore k=2.0 trend+vol gates       trades   410  R by 6-month block: -0.19 -0.17 -0.04 +0.06 +0.02 +0.01
+zscore k=2.5 no gates              trades   440  R by 6-month block: +0.01 -0.27 -0.03 -0.28 -0.16 -0.22
+zscore k=2.5 trend+vol gates       trades   115  R by 6-month block: +0.09 -0.25 +0.24 -0.31 +0.01 -0.16
+atr_ema k=1.5 no gates             trades  1182  R by 6-month block: -0.11 -0.10 -0.09 -0.11 -0.10 -0.07
+atr_ema k=1.5 trend+vol gates      trades   700  R by 6-month block: -0.04 -0.19 -0.10 -0.10 -0.05 -0.05
+atr_ema k=2.0 no gates             trades  1279  R by 6-month block: -0.15 -0.15 -0.15 -0.20 -0.12 -0.12
+atr_ema k=2.0 trend+vol gates      trades   576  R by 6-month block: -0.15 -0.14 -0.05 -0.20 -0.06 -0.05
+atr_ema k=2.5 no gates             trades   942  R by 6-month block: -0.16 -0.22 -0.12 -0.14 -0.18 -0.20
+atr_ema k=2.5 trend+vol gates      trades   250  R by 6-month block: -0.12 -0.13 +0.14 -0.15 +0.04 +0.04
+
+walk-forward picks:
+            test_block                         pick  train_t  oos_n  oos_mean_r  oos_t  orb_n  orb_mean_r  orb_t
+2023-04-01..2023-09-30            (none: no trades)      NaN      0         NaN    NaN    143       0.256  1.644
+2023-10-01..2024-03-31 zscore k=2.5 trend+vol gates    0.268     14      -0.314 -1.278    141       0.065  0.511
+2024-04-01..2024-09-30   vwap k=2.5 trend+vol gates    0.521    143       0.031  0.352    137       0.284  1.547
+2024-10-01..2025-03-31 zscore k=1.5 trend+vol gates    0.951    128      -0.082 -0.957    136       0.127  0.845
+
+OOS pooled  mean-reversion WF: {'n': 285, 'mean_r': np.float64(-0.037), 't': np.float64(-0.61)} | frozen ORB same blocks: {'n': 557, 'mean_r': np.float64(0.183), 't': np.float64(2.361)}
+
+stability (mean R per 6-month block):
+                                  B1     B2     B3     B4     B5     B6  blocks_positive  all_r  all_t
+atr_ema k=2.5 trend+vol gates -0.122 -0.127  0.138 -0.152  0.041  0.036                3 -0.022 -0.334
+zscore k=2.5 trend+vol gates   0.089 -0.250  0.243 -0.314  0.006 -0.156                3 -0.045 -0.460
+zscore k=1.5 trend+vol gates  -0.064 -0.067 -0.053 -0.075  0.180 -0.082                1 -0.026 -0.717
+vwap k=2.5 trend+vol gates     0.003 -0.095 -0.017  0.096  0.031 -0.184                3 -0.029 -0.787
+zscore k=2.0 trend+vol gates  -0.195 -0.170 -0.035  0.058  0.019  0.012                3 -0.058 -1.163
+vwap k=2.0 trend+vol gates     0.040 -0.054 -0.092  0.019 -0.010 -0.169                2 -0.046 -1.414
+vwap k=1.5 trend+vol gates     0.020 -0.160 -0.247  0.048  0.026 -0.068                3 -0.065 -1.933
+vwap k=2.0 no gates            0.015 -0.017 -0.107 -0.068 -0.020 -0.122                1 -0.053 -2.035
+vwap k=2.5 no gates           -0.068 -0.054 -0.072  0.019 -0.056 -0.153                1 -0.066 -2.227
+atr_ema k=1.5 trend+vol gates -0.037 -0.190 -0.104 -0.101 -0.052 -0.052                0 -0.088 -2.557
+vwap k=1.5 no gates            0.028 -0.084 -0.142 -0.066 -0.066 -0.079                1 -0.069 -2.614
+atr_ema k=2.0 trend+vol gates -0.151 -0.138 -0.054 -0.205 -0.065 -0.047                0 -0.106 -2.630
+zscore k=2.5 no gates          0.013 -0.274 -0.030 -0.281 -0.164 -0.217                1 -0.157 -2.873
+zscore k=2.0 no gates         -0.114 -0.146 -0.104 -0.089 -0.019 -0.056                0 -0.090 -2.904
+atr_ema k=1.5 no gates        -0.115 -0.102 -0.092 -0.114 -0.096 -0.066                0 -0.098 -3.624
+zscore k=1.5 no gates         -0.063 -0.073 -0.148 -0.185 -0.062 -0.065                0 -0.100 -4.072
+atr_ema k=2.5 no gates        -0.161 -0.218 -0.119 -0.144 -0.181 -0.202                0 -0.171 -4.994
+atr_ema k=2.0 no gates        -0.155 -0.145 -0.147 -0.200 -0.120 -0.124                0 -0.148 -5.345
+
+walk-forward pick for the next period (trained on the last 12 months): zscore k=1.5 trend+vol gates
+
+== execution statistics ==
+  close_to_next_open_median_ticks              7.0
+  close_to_next_open_p90_ticks                 26.0
+  close_to_next_open_mean_ticks                11.615973778763953
+  share_within_1_tick                          0.12879717964024645

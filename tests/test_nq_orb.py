@@ -34,13 +34,13 @@ def test_breakout_enters_next_tick_with_range_stop_and_flattens():
     assert len(t) == 1
     tr = t.iloc[0]
     assert tr.side == "LONG" and tr.stop == 19950
-    assert tr.entry == 20055                                         # breakout close (slippage charged as cost)
+    assert tr.entry == 20055.25                                      # breakout close + 1 tick (in the price)
     assert tr.entry_ts.tz_convert(NY).strftime("%H:%M") == "09:55"
     assert tr.exit_ts.tz_convert(NY).strftime("%H:%M") == "15:50"    # flattened at the cutoff
     # $1,000 risk / (105 pts x $2 + costs) -> 4 contracts
     assert tr.qty == 4
     gross = (tr.exit - tr.entry) * tr.qty * 2
-    assert tr.pnl == pytest.approx(gross - tr.qty * 2 * (COMMISSION_PER_SIDE + 0.25 * 2))   # + 1 tick each side
+    assert tr.pnl == pytest.approx(gross - tr.qty * 2 * COMMISSION_PER_SIDE)    # market slippage is in the prices
 
 
 def test_no_trade_without_breakout_or_with_a_missing_range_candle():
@@ -56,4 +56,7 @@ def test_stop_loss_costs_about_one_r():
     rows += [(20055, 20056, 19940, 19945)] + [(19945, 19950, 19940, 19945)] * 70   # straight through the stop
     t, _ = run_orb(frame(day("2026-01-05", rows)), risk_pct=2.0)
     tr = t.iloc[0]
-    assert tr.pnl < 0 and -1.15 < tr.r < -1.0 and tr.exit == 19950      # stop price; its tick is a cost
+    assert tr.exit == 19950 and tr.exit_kind == "stop"                   # engine fills a stop at its trigger
+    gross = (tr.exit - tr.entry) * tr.qty * 2
+    assert tr.pnl == pytest.approx(gross - tr.qty * (2 * COMMISSION_PER_SIDE + 0.25 * 2))   # + stop tick as cost
+    assert -1.15 < tr.r < -1.0

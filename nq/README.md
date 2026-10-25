@@ -1,5 +1,7 @@
 # nq/: NQ/MNQ research on NautilusTrader (backtest + paper only)
 
+> Execution and data audit: see `EXECUTION_AUDIT.md` (supersedes the execution notes below).
+
 ```bash
 pip install nautilus_trader==1.231.0 -r requirements.txt
 python -m nq.backtest --data DIR --start 2022-03-21 --end 2024-03-31   # one ORB run
@@ -13,8 +15,9 @@ python -m pytest tests/test_nq_orb.py
   regular-hours candles x 41 / x 10, rounded to the 0.25 tick, stamped at candle close
   (`nq/data.py`). No Globex session, futures volume, rolls or basis.
 * **Engine:** NautilusTrader `BacktestEngine`, `FuturesContract` (MNQ $2/pt, MES $5/pt), margin
-  account, `PerContractFeeModel` ($0.85/contract/side), `FillModel(prob_slippage=1)` (one tick on
-  market and stop fills). Market orders fill at the signal candle's close + 1 tick.
+  account. Execution model (audited, see `EXECUTION_AUDIT.md`): $0.85/contract/side commission;
+  market orders fill at the signal candle's close + 1 tick (slippage in the price); stops at their
+  trigger (or the open on a gap) + 1 tick booked as cost; limits at the limit, trade-through only.
 * **ORB** (`nq/strategies/orb.py`): clock-based range, completed candles only, stop-market at the
   other side of the range, flat at 15:50, contracts sized from risk %.
 

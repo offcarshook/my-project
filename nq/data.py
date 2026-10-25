@@ -48,4 +48,9 @@ def load_proxy(data_dir: str, roots=("MNQ",)) -> dict[str, pd.DataFrame]:
 
 
 def to_bars(frame: pd.DataFrame, instrument) -> list:
-    return BarDataWrangler(bar_type(instrument), instrument).process(frame)
+    # fresh writable column arrays: the wrangler's Cython code rejects pandas' read-only
+    # copy-on-write buffers (e.g. after editing a copied frame)
+    data = frame[["open", "high", "low", "close", "volume"]].copy()
+    for col in data.columns:
+        data[col] = data[col].to_numpy(dtype=float, copy=True)
+    return BarDataWrangler(bar_type(instrument), instrument).process(data)

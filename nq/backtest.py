@@ -2,9 +2,9 @@
 
     python -m nq.backtest --data DIR --start 2022-03-21 --end 2024-03-31 [--range 15 ...]
 
-Costs: per-contract commission + exchange fees (PerContractFeeModel) and one tick of slippage
-on every market/stop fill (FillModel prob_slippage=1; in bar mode NautilusTrader applies the same
-tick to limit fills, a deliberate conservative offset to touch-fills). A market order sent on a candle's close
+Costs: per-contract commission + exchange fees on every fill, and one tick of slippage on every
+market/stop fill, charged as a cost (CommissionAndSlippage). Limit orders fill at their limit
+price only when the market trades through it (FillModel prob_fill_on_limit=0), never worse. A market order sent on a candle's close
 fills at that close plus one tick (the next trade after the close; on 5-minute NQ candles the next
 open is typically within a tick or two of it). Margin account, netting OMS."""
 import argparse
@@ -14,10 +14,10 @@ import numpy as np
 import pandas as pd
 
 from nautilus_trader.backtest.engine import BacktestEngine
-from nautilus_trader.backtest.models import FillModel, PerContractFeeModel
+from nautilus_trader.backtest.models import FeeModel, FillModel
 from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
 from nautilus_trader.model.currencies import USD
-from nautilus_trader.model.enums import AccountType, OmsType
+from nautilus_trader.model.enums import AccountType, OmsType, OrderType
 from nautilus_trader.model.identifiers import TraderId
 from nautilus_trader.model.objects import Money
 
@@ -28,6 +28,25 @@ from nq.strategies.orb import OpeningRangeBreakout, OrbConfig
 
 COMMISSION_PER_SIDE = 0.85     # USD per micro contract per side (broker + CME + NFA, conservative)
 STARTING_CASH = 50_000
+SLIPPAGE_TICKS = 1             # per market / stop fill
+
+
+class CommissionAndSlippage(FeeModel):
+    """Per-contract commission on every fill, plus `slippage_ticks` ticks per contract on market
+    and stop fills only, charged as a cost. Fill prices themselves stay exact, so a limit order
+    can never fill worse than its limit (NautilusTrader's FillModel(prob_slippage) would also slip
+    limit fills in bar mode, which is what this replaces)."""
+
+    def __init__(self, commission_per_side: float, slippage_ticks: int = SLIPPAGE_TICKS):
+        super().__init__()
+        self.commission, self.ticks = commission_per_side, slippage_ticks
+
+    def get_commission(self, order, fill_qty, fill_px, instrument):
+        qty = float(fill_qty)
+        cost = self.commission * qty
+        if order.order_type != OrderType.LIMIT:
+            cost += self.ticks * float(instrument.price_increment) * float(instrument.multiplier) * qty
+        return Money(cost, instrument.quote_currency)
 
 
 def run_strategy(strategy_cls, config_cls, frame: pd.DataFrame, start=None, end=None, cash=STARTING_CASH,
@@ -45,8 +64,9 @@ def run_strategy(strategy_cls, config_cls, frame: pd.DataFrame, start=None, end=
                                                  logging=LoggingConfig(log_level="ERROR")))
     engine.add_venue(VENUE, OmsType.NETTING, AccountType.MARGIN, [Money(cash, USD)], base_currency=USD,
                      default_leverage=Decimal(1),
-                     fill_model=FillModel(prob_slippage=1.0 if slippage_ticks else 0.0, random_seed=1),
-                     fee_model=PerContractFeeModel(Money(COMMISSION_PER_SIDE, USD)))
+                     # limits fill only when price trades THROUGH them (not on a touch), at the limit
+                     fill_model=FillModel(prob_fill_on_limit=0.0, prob_slippage=0.0, random_seed=1),
+                     fee_model=CommissionAndSlippage(COMMISSION_PER_SIDE, SLIPPAGE_TICKS if slippage_ticks else 0))
     engine.add_instrument(inst)
     engine.add_data(to_bars(sel, inst))
     strat = strategy_cls(config_cls(instrument_id=inst.id, bar_type=bar_type(inst),

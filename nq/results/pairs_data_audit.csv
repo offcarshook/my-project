@@ -1,0 +1,31 @@
+,0
+QQQ_bars,89978
+QQQ_first_last,2022-03-07 09:30:00-05:00 .. 2026-10-21 15:55:00-04:00
+QQQ_duplicates,0
+QQQ_monotonic,True
+QQQ_outside_0930_1555,0
+QQQ_off_5min_grid,0
+QQQ_bad_ohlc,0
+QQQ_zero_volume,0
+QQQ_sources,iex
+QQQ_sessions,1162
+QQQ_sessions_not_78_bars,255
+QQQ_sessions_short_(<78),255
+SPY_bars,89982
+SPY_first_last,2022-03-07 09:30:00-05:00 .. 2026-10-21 15:55:00-04:00
+SPY_duplicates,0
+SPY_monotonic,True
+SPY_outside_0930_1555,0
+SPY_off_5min_grid,0
+SPY_bad_ohlc,0
+SPY_zero_volume,0
+SPY_sources,iex
+SPY_sessions,1162
+SPY_sessions_not_78_bars,250
+SPY_sessions_short_(<78),250
+common_bars,89769
+QQQ_only_bars,209
+SPY_only_bars,213
+sessions_in_one_only,0
+SPY_first_open,431.72
+QQQ_first_open,337.33

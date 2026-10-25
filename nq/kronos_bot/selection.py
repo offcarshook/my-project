@@ -95,7 +95,7 @@ def fast_stats(r: pd.Series, d: pd.Series) -> dict:
     t = r[d != 0]
     loss = -t[t < 0].sum()
     return {"trades": int((d != 0).sum()), "days": len(r),
-            "hit_pct": float((t > 0).mean() * 100) if len(t) else np.nan,
+            "win_pct_net": float((t > 0).mean() * 100) if len(t) else np.nan,
             "exp_bp": float(t.mean() * 1e4) if len(t) else np.nan,
             "t": float(t.mean() / (t.std() / np.sqrt(len(t)))) if len(t) > 1 else np.nan,
             "pf": float(t[t > 0].sum() / loss) if loss > 0 else np.nan,
@@ -199,7 +199,7 @@ def diagnostics(df: pd.DataFrame, frozen: dict, period: str = "train") -> str:
 
 
 def _fmt(st: dict) -> str:
-    return (f"trades {st['trades']}, hit {st['hit_pct']:.1f}%, net {st['exp_bp']:+.2f} bp/trade (t {st['t']:+.2f}), "
+    return (f"trades {st['trades']}, net win {st['win_pct_net']:.1f}%, net {st['exp_bp']:+.2f} bp/trade (t {st['t']:+.2f}), "
             f"PF {st['pf']:.2f}, Sharpe {st['sharpe']:+.2f}")
 
 
@@ -332,7 +332,7 @@ def main(argv=None):
         sel["grid"].to_csv(f"{OUT}/v2_{tag}_train_grid.csv", index=False)
         commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
         frozen = {k: v for k, v in sel.items() if k != "grid"}
-        frozen.update(window=a.window, model=WINDOWS[a.window]["model"], train=PERIODS["train"], code_commit=commit,
+        frozen.update(window=a.window, model=WINDOWS[a.window]["model"], train_period=PERIODS["train"], code_commit=commit,
                       train_rows=int((df["period"] == "train").sum()))
         with open(frozen_path(a.window), "w") as f:
             json.dump(frozen, f, indent=2, default=str)

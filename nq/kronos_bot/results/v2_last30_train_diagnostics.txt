@@ -1,0 +1,21 @@
+== train: 688 decisions
+IC (Spearman vs realized): k_exp_ret +0.106, k_median_ret +0.100, k_prob_c +0.091, k_snr +0.095
+rank correlation between outputs:
+              k_exp_ret  k_median_ret  k_prob_c  k_snr
+k_exp_ret          1.00          0.96      0.90   0.95
+k_median_ret       0.96          1.00      0.90   0.91
+k_prob_c           0.90          0.90      1.00   0.96
+k_snr              0.95          0.91      0.96   1.00
+IC of k_median_ret after removing what k_exp_ret explains: -0.004
+IC of k_prob_c after removing what k_exp_ret explains: -0.012
+IC of k_snr after removing what k_exp_ret explains: -0.018
+window finished up on 52.5% of days; Kronos went long on 63.1%
+Kronos longs: n 434, hit 48.4%, net -1.06 bp, t -1.15
+Kronos shorts: n 254, hit 47.2%, net +0.64 bp, t +0.40
+always long: trades 688, net win 46.2%, net -2.40 bp/trade (t -2.89), PF 0.72, Sharpe -1.75
+H3 (existing baseline): trades 688, net win 44.9%, net -1.79 bp/trade (t -2.15), PF 0.79, Sharpe -1.30
+A in up-trend regime: trades 520, net win 46.0%, net -1.45 bp/trade (t -1.75), PF 0.80, Sharpe -1.22
+A in down-trend regime: trades 118, net win 60.2%, net +4.52 bp/trade (t +1.48), PF 1.43, Sharpe +2.17
+S (C-EV) in low-volatility tercile: trades 52, net win 44.2%, net -1.97 bp/trade (t -0.83), PF 0.72, Sharpe -0.88
+S (C-EV) in mid-volatility tercile: trades 73, net win 53.4%, net +1.98 bp/trade (t +0.74), PF 1.29, Sharpe +0.78
+S (C-EV) in high-volatility tercile: trades 109, net win 53.2%, net +3.64 bp/trade (t +1.23), PF 1.36, Sharpe +1.30

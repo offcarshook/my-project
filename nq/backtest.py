@@ -32,7 +32,7 @@ SLIPPAGE_TICKS = 1             # per market / stop fill
 
 
 def run_strategy(strategy_cls, config_cls, frame: pd.DataFrame, start=None, end=None, cash=STARTING_CASH,
-                 slippage_ticks=True, **params):
+                 slippage_ticks=True, bar_minutes: int = 5, **params):
     """Backtest one strategy on one proxy-MNQ frame between start/end (New York dates), with the
     same venue, fees, slippage and margin account for every strategy. Returns
     (trades DataFrame, account equity Series)."""
@@ -51,8 +51,10 @@ def run_strategy(strategy_cls, config_cls, frame: pd.DataFrame, start=None, end=
                      fee_model=CommissionAndStopSlippage(COMMISSION_PER_SIDE, SLIPPAGE_TICKS if slippage_ticks else 0),
                      bar_adaptive_high_low_ordering=False)
     engine.add_instrument(inst)
-    engine.add_data(to_bars(sel, inst))
-    strat = strategy_cls(config_cls(instrument_id=inst.id, bar_type=bar_type(inst),
+    engine.add_data(to_bars(sel, inst, bar_minutes))
+    if bar_minutes != 5:
+        params["bar_minutes"] = bar_minutes
+    strat = strategy_cls(config_cls(instrument_id=inst.id, bar_type=bar_type(inst, bar_minutes),
                                     cost_per_contract=2 * COMMISSION_PER_SIDE + 2 * 0.5, **params))
     engine.add_strategy(strat)
     engine.run()

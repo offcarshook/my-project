@@ -38,6 +38,7 @@ class OrbConfig(StrategyConfig, frozen=True):
     max_range_pct: float = 2.5
     max_contracts: int = 20
     cost_per_contract: float = 2.5    # round-trip estimate used only for sizing
+    bar_minutes: int = 5              # candle size of bar_type
 
 
 class OpeningRangeBreakout(Strategy):
@@ -72,7 +73,7 @@ class OpeningRangeBreakout(Strategy):
         hhmm = t.strftime("%H:%M")
         minutes_open = t.hour * 60 + t.minute - 570
         close, high, low = float(bar.close), float(bar.high), float(bar.low)
-        need = self.config.range_minutes // 5
+        need = self.config.range_minutes // self.config.bar_minutes
 
         if hhmm >= self.config.flatten_at:
             self.cancel_all_orders(self.config.instrument_id)
